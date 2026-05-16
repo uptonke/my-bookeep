@@ -49,7 +49,8 @@ const state = {
     txAccount: "",
     txStart: "",
     txEnd: ""
-  }
+  },
+  loadErrors: []
 };
 
 const pageMeta = {
@@ -311,50 +312,66 @@ async function queryTable(name, options = {}) {
 
 async function loadAll() {
   state.loading = true;
+  state.loadErrors = [];
   showAlert("");
-  try {
-    const [
-      years, accounts, categories, tags, budgetItems, transactions,
-      transactionView, accountBalances, yearSummary, budgetSummary,
-      categorySpending, monthlyCashflow, recurring, creditCards,
-      creditStatements, loans, goals
-    ] = await Promise.all([
-      queryTable("years", { order: { column: "budget_year", ascending: true } }),
-      queryTable("accounts", { order: { column: "sort_order", ascending: true } }),
-      queryTable("categories", { order: { column: "sort_order", ascending: true } }),
-      queryTable("tags", { order: { column: "name", ascending: true } }),
-      queryTable("budget_items", { order: { column: "sort_order", ascending: true } }),
-      queryTable("transactions", { order: { column: "transaction_date", ascending: false } }),
-      queryTable("v_transactions_full", { order: { column: "transaction_date", ascending: false } }),
-      queryTable("v_account_balances", { order: { column: "sort_order", ascending: true } }),
-      queryTable("v_year_budget_summary", { order: { column: "budget_year", ascending: true } }),
-      queryTable("v_budget_item_summary", { order: { column: "name", ascending: true } }),
-      queryTable("v_category_spending"),
-      queryTable("v_monthly_cashflow"),
-      queryTable("recurring_transactions", { order: { column: "next_due_date", ascending: true } }),
-      queryTable("credit_cards", { order: { column: "card_name", ascending: true } }),
-      queryTable("credit_card_statements", { order: { column: "due_date", ascending: false } }),
-      queryTable("loans", { order: { column: "created_at", ascending: false } }),
-      queryTable("goals", { order: { column: "priority", ascending: true } })
-    ]);
 
-    Object.assign(state.data, {
-      years, accounts, categories, tags, budgetItems, transactions,
-      transactionView, accountBalances, yearSummary, budgetSummary,
-      categorySpending, monthlyCashflow, recurring, creditCards,
-      creditStatements, loans, goals
+  const requests = {
+    years: queryTable("years", { order: { column: "budget_year", ascending: true } }),
+    accounts: queryTable("accounts", { order: { column: "sort_order", ascending: true } }),
+    categories: queryTable("categories", { order: { column: "sort_order", ascending: true } }),
+    tags: queryTable("tags", { order: { column: "name", ascending: true } }),
+    budgetItems: queryTable("budget_items", { order: { column: "sort_order", ascending: true } }),
+    transactions: queryTable("transactions", { order: { column: "transaction_date", ascending: false } }),
+    transactionView: queryTable("v_transactions_full", { order: { column: "transaction_date", ascending: false } }),
+    accountBalances: queryTable("v_account_balances", { order: { column: "sort_order", ascending: true } }),
+    yearSummary: queryTable("v_year_budget_summary", { order: { column: "budget_year", ascending: true } }),
+    budgetSummary: queryTable("v_budget_item_summary", { order: { column: "name", ascending: true } }),
+    categorySpending: queryTable("v_category_spending"),
+    monthlyCashflow: queryTable("v_monthly_cashflow"),
+    recurring: queryTable("recurring_transactions", { order: { column: "next_due_date", ascending: true } }),
+    creditCards: queryTable("credit_cards", { order: { column: "card_name", ascending: true } }),
+    creditStatements: queryTable("credit_card_statements", { order: { column: "due_date", ascending: false } }),
+    loans: queryTable("loans", { order: { column: "created_at", ascending: false } }),
+    goals: queryTable("goals", { order: { column: "priority", ascending: true } })
+  };
+
+  try {
+    const entries = Object.entries(requests);
+    const results = await Promise.allSettled(entries.map(async ([key, promise]) => [key, await promise]));
+    const nextData = {};
+    const errors = [];
+
+    results.forEach((result, index) => {
+      const key = entries[index][0];
+      if (result.status === "fulfilled") {
+        const [resolvedKey, value] = result.value;
+        nextData[resolvedKey] = value;
+      } else {
+        errors.push(`${key}: ${result.reason?.message || result.reason}`);
+      }
     });
 
-    if (!state.selectedYearId && years.length) {
-      const current = years.find(y => Number(y.budget_year) === new Date().getFullYear()) || years[years.length - 1];
+    Object.assign(state.data, nextData);
+    state.loadErrors = errors;
+
+    if (!state.selectedYearId && state.data.years.length) {
+      const current = state.data.years.find(y => Number(y.budget_year) === new Date().getFullYear()) || state.data.years[state.data.years.length - 1];
       state.selectedYearId = current.id;
       state.selectedBudgetYear = current.budget_year;
     }
 
-    setConnection(true, "已連線");
+    if (errors.length) {
+      console.warn("部分資料讀取失敗", errors);
+      setConnection(false, "部分資料讀取失敗");
+      showAlert(`部分資料讀取失敗：${escapeHtml(errors.slice(0, 3).join("；"))}${errors.length > 3 ? "……" : ""}`, "warn");
+    } else {
+      setConnection(true, "已連線");
+    }
+
     renderYearSelect();
   } catch (error) {
     console.error(error);
+    state.loadErrors = [error.message];
     setConnection(false, "連線或資料庫結構異常");
     showAlert(`資料庫讀取失敗：${escapeHtml(error.message)}。請確認已執行資料庫結構檔，且設定檔的專案網址與公開金鑰正確。`, "bad");
   } finally {
@@ -1278,7 +1295,13 @@ async function handleSubmit(event) {
     if (form.id === "accountForm") await saveAccount(form);
     if (form.id === "categoryForm") await saveCategory(form);
     if (form.id === "tagForm") await saveTag(form);
-    if (form.id === "recurringForm") await saveRecurring(form);
+    if (form.id === "recurringForm") {
+      const saved = await saveRecurring(form);
+      if (saved?.id) {
+        state.data.recurring = [saved, ...state.data.recurring.filter(row => row.id !== saved.id)]
+          .sort((a, b) => String(a.next_due_date || "").localeCompare(String(b.next_due_date || "")));
+      }
+    }
     if (form.id === "creditCardForm") await saveCreditCard(form);
     if (form.id === "loanForm") await saveLoan(form);
     if (form.id === "goalForm") await saveGoal(form);
@@ -1406,7 +1429,7 @@ async function saveRecurring(form) {
     note: d.note,
     is_active: boolValue(d.is_active)
   };
-  await upsert("recurring_transactions", payload);
+  return await upsert("recurring_transactions", payload);
 }
 
 async function saveCreditCard(form) {
