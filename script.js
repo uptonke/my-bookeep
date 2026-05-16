@@ -9,6 +9,8 @@ const state = {
   loading: false,
   selectedYearId: null,
   selectedBudgetYear: new Date().getFullYear(),
+  draftTxType: "expense",
+  draftRecurringType: "expense",
   data: {
     years: [],
     accounts: [],
@@ -56,10 +58,10 @@ const pageMeta = {
   budget: ["年度預算", "年度預算項目、結轉與預算使用率"],
   accounts: ["帳戶", "現金、銀行、電子支付、信用卡與其他帳戶"],
   categories: ["分類 / 標籤", "收支分類與交易標籤管理"],
-  recurring: ["定期交易", "固定收入、訂閱、房租、貸款扣款等"],
+  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態"],
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
-  reports: ["報表", "月現金流、分類支出、T 字帳與 CSV 匯出"],
+  reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
   settings: ["設定", "連線狀態、資料匯出與操作提示"]
 };
 
@@ -85,6 +87,130 @@ function fmtNumber(value, digits = 0) {
   return new Intl.NumberFormat("zh-TW", {
     maximumFractionDigits: digits
   }).format(Number(value || 0));
+}
+
+
+
+const labelMaps = {
+  income: "收入",
+  expense: "支出",
+  transfer: "轉帳",
+  refund: "退款",
+  saving: "儲蓄",
+  other: "其他",
+
+  survival: "生存必要",
+  quality: "生活品質",
+  luxury: "奢侈娛樂",
+  investment: "自我投資",
+
+  fixed: "固定",
+  variable: "變動",
+  one_time: "一次性",
+
+  cleared: "已入帳",
+  pending: "待確認",
+  cancelled: "已取消",
+
+  annual: "每年",
+  monthly: "每月",
+  weekly: "每週",
+  daily: "每天",
+  quarterly: "每季",
+  yearly: "每年",
+  custom: "自訂",
+
+  none: "無",
+  carryover: "餘額結轉",
+  overspend_to_next: "超支帶入下期",
+
+  cash: "現金",
+  bank: "銀行",
+  e_wallet: "電子支付",
+  credit_card: "信用卡",
+  loan: "貸款",
+  asset: "資產",
+
+  cashback: "現金回饋",
+  points: "點數",
+  miles: "哩程",
+
+  student_loan: "學貸",
+  personal_loan: "信貸",
+  mortgage: "房貸",
+  car_loan: "車貸",
+  credit_card_debt: "信用卡債",
+  installment: "分期付款",
+
+  active: "啟用",
+  paused: "暫停",
+  completed: "已完成",
+  paid_off: "已還清",
+
+  debt_reduction: "還債",
+  travel: "旅行",
+  emergency_fund: "緊急預備金",
+  purchase: "大額購買"
+};
+
+const tableLabelMap = {
+  years: "年度",
+  accounts: "帳戶",
+  categories: "分類",
+  tags: "標籤",
+  budget_items: "預算項目",
+  transactions: "交易",
+  recurring_transactions: "訂閱",
+  credit_cards: "信用卡",
+  loans: "貸款",
+  goals: "目標"
+};
+
+const colorPalette = [
+  ["#64748b", "石板灰"],
+  ["#2563eb", "穩重藍"],
+  ["#0284c7", "湖水藍"],
+  ["#0f766e", "深青綠"],
+  ["#16a34a", "成長綠"],
+  ["#ca8a04", "琥珀黃"],
+  ["#f97316", "活力橘"],
+  ["#dc2626", "警示紅"],
+  ["#7c3aed", "紫色"],
+  ["#db2777", "桃紅"],
+  ["#334155", "深灰"],
+  ["#000000", "黑色"]
+];
+
+function labelOf(value) {
+  if (value === null || value === undefined || value === "") return "";
+  return labelMaps[String(value)] || String(value);
+}
+
+function tableLabel(value) {
+  return tableLabelMap[String(value)] || "資料";
+}
+
+function colorName(value) {
+  const found = colorPalette.find(([hex]) => hex.toLowerCase() === String(value || "").toLowerCase());
+  return found ? found[1] : "自訂顏色";
+}
+
+function colorOptions(selected = "#64748b") {
+  const current = selected || "#64748b";
+  const hasCurrent = colorPalette.some(([hex]) => hex.toLowerCase() === String(current).toLowerCase());
+  const opts = colorPalette.map(([hex, name]) => {
+    const isSelected = String(hex).toLowerCase() === String(current).toLowerCase() ? "selected" : "";
+    return `<option value="${escapeHtml(hex)}" ${isSelected}>${escapeHtml(name)}</option>`;
+  });
+  if (!hasCurrent) {
+    opts.unshift(`<option value="${escapeHtml(current)}" selected>目前顏色</option>`);
+  }
+  return opts.join("");
+}
+
+function colorDot(value) {
+  const color = value || "#64748b";
+  return `<span class="color-dot" style="background:${escapeHtml(color)}"></span>${escapeHtml(colorName(color))}`;
 }
 
 function today() {
@@ -114,11 +240,30 @@ function optionList(rows, selected, label = "name", value = "id", placeholder = 
   return opts.join("");
 }
 
+function categoryTypeFor(type = "") {
+  if (type === "refund") return "expense";
+  return type;
+}
+
 function categoryOptions(type = "", selected = "") {
+  const mappedType = categoryTypeFor(type);
   const rows = state.data.categories
-    .filter(c => !type || c.type === type || c.type === "transfer")
+    .filter(c => !mappedType || c.type === mappedType)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name));
   return optionList(rows, selected, "name", "id", "未分類");
+}
+
+function expenseTransactionOptions(selected = "") {
+  const rows = state.data.transactionView
+    .filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear) && t.type === "expense" && t.status !== "cancelled")
+    .sort((a, b) => String(b.transaction_date).localeCompare(String(a.transaction_date)))
+    .slice(0, 120);
+  const opts = [`<option value="">不關聯原支出</option>`];
+  rows.forEach(t => {
+    const label = `${t.transaction_date}｜${fmtMoney(t.amount)}｜${t.merchant || t.category_name || "未命名支出"}`;
+    opts.push(`<option value="${escapeHtml(t.id)}" ${String(t.id) === String(selected) ? "selected" : ""}>${escapeHtml(label)}</option>`);
+  });
+  return opts.join("");
 }
 
 function accountOptions(selected = "") {
@@ -146,8 +291,7 @@ function transactionsForSelectedYear() {
 }
 
 function typeBadge(type) {
-  const map = { income: "收入", expense: "支出", transfer: "轉帳" };
-  return `<span class="badge ${escapeHtml(type)}">${map[type] || type}</span>`;
+  return `<span class="badge ${escapeHtml(type)}">${escapeHtml(labelOf(type))}</span>`;
 }
 
 async function queryTable(name, options = {}) {
@@ -204,8 +348,8 @@ async function loadAll() {
     renderYearSelect();
   } catch (error) {
     console.error(error);
-    setConnection(false, "連線或 schema 異常");
-    showAlert(`Supabase 讀取失敗：${escapeHtml(error.message)}。請確認已執行 schema.sql，且 config.js 的 Project URL / anon key 正確。`, "bad");
+    setConnection(false, "連線或資料庫結構異常");
+    showAlert(`資料庫讀取失敗：${escapeHtml(error.message)}。請確認已執行資料庫結構檔，且設定檔的專案網址與公開金鑰正確。`, "bad");
   } finally {
     state.loading = false;
   }
@@ -272,7 +416,7 @@ function renderOverview() {
         <span class="badge">${fmtNumber(pct, 1)}%</span>
       </div>
       <div class="${progressClass}"><span style="width:${pct}%"></span></div>
-      <p class="metric-sub">可用預算 = 年度預算 + 前年盈餘結轉。支出只計入狀態不是 cancelled 的交易。</p>
+      <p class="metric-sub">可用預算 = 年度預算 + 前年盈餘結轉。支出會扣除退款，只計入狀態不是「已取消」的交易。</p>
     </div>
 
     <div class="grid cols-2">
@@ -294,7 +438,7 @@ function renderOverview() {
 
     <div class="grid cols-2">
       <div class="card">
-        <h3>本年分類支出 Top 8</h3>
+        <h3>本年分類淨支出前 8 名</h3>
         ${renderCategoryChart("expense")}
       </div>
       <div class="card">
@@ -322,7 +466,7 @@ function renderAccountBalanceList() {
     <div class="chart-list">
       ${rows.map(a => `
         <div class="card-title-row">
-          <span>${escapeHtml(a.name)} <span class="badge">${escapeHtml(a.type)}</span></span>
+          <span>${escapeHtml(a.name)} <span class="badge">${escapeHtml(labelOf(a.type))}</span></span>
           <strong class="mono">${fmtMoney(a.current_balance)}</strong>
         </div>
       `).join("")}
@@ -342,7 +486,7 @@ function renderSmallTxTable(rows) {
               <td>${escapeHtml(t.transaction_date)}</td>
               <td>${typeBadge(t.type)}</td>
               <td>${escapeHtml(t.category_name || "未分類")}</td>
-              <td class="mono ${t.type === "income" ? "good" : t.type === "expense" ? "bad" : ""}">${fmtMoney(t.amount)}</td>
+              <td class="mono ${(t.type === "income" || t.type === "refund") ? "good" : t.type === "expense" ? "bad" : ""}">${fmtMoney(t.amount)}</td>
               <td>${escapeHtml(t.merchant || "")}</td>
             </tr>
           `).join("")}
@@ -355,7 +499,7 @@ function renderSmallTxTable(rows) {
 function renderTransactions() {
   const edit = state.editing.transaction;
   const defaultDate = edit?.transaction_date || today();
-  const type = edit?.type || "expense";
+  const type = edit?.type || state.draftTxType || "expense";
   const rows = applyTxFilters(transactionsForSelectedYear());
 
   return `
@@ -366,6 +510,7 @@ function renderTransactions() {
         ${field("日期", `<input class="input" type="date" name="transaction_date" value="${escapeHtml(defaultDate)}" required>`)}
         ${field("類型", `<select class="input" name="type" id="txTypeInput" required>
           <option value="expense" ${type === "expense" ? "selected" : ""}>支出</option>
+          <option value="refund" ${type === "refund" ? "selected" : ""}>退款</option>
           <option value="income" ${type === "income" ? "selected" : ""}>收入</option>
           <option value="transfer" ${type === "transfer" ? "selected" : ""}>轉帳</option>
         </select>`)}
@@ -374,7 +519,8 @@ function renderTransactions() {
         ${field("轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`)}
         ${field("分類", `<select class="input" name="category_id">${categoryOptions(type, edit?.category_id || "")}</select>`)}
         ${field("預算項目", `<select class="input" name="budget_item_id">${budgetItemOptions(edit?.budget_item_id || "")}</select>`)}
-        ${field("商家 / 對象", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="例：威秀、家樂福、薪資">`)}
+        ${field("關聯原支出", `<select class="input" name="related_transaction_id">${expenseTransactionOptions(edit?.related_transaction_id || "")}</select>`)}
+        ${field("商家 / 對象", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="例：威秀、家樂福、薪資、退票退款">`)}
         ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="現金 / 信用卡 / 轉帳">`)}
         ${field("必要程度", `<select class="input" name="necessity_level">
           ${selectOpts(["survival","quality","luxury","investment","other"], edit?.necessity_level || "other")}
@@ -386,11 +532,11 @@ function renderTransactions() {
           ${selectOpts(["cleared","pending","cancelled"], edit?.status || "cleared")}
         </select>`)}
         <div class="field wide">
-          <label>備註 / 收據 URL / 附件 URL</label>
+          <label>備註 / 收據連結 / 附件連結</label>
           <div class="form-grid three">
             <textarea class="input" name="note" placeholder="備註">${escapeHtml(edit?.note || "")}</textarea>
-            <input class="input" name="receipt_url" value="${escapeHtml(edit?.receipt_url || "")}" placeholder="收據 URL">
-            <input class="input" name="attachment_url" value="${escapeHtml(edit?.attachment_url || "")}" placeholder="附件 URL">
+            <input class="input" name="receipt_url" value="${escapeHtml(edit?.receipt_url || "")}" placeholder="收據連結">
+            <input class="input" name="attachment_url" value="${escapeHtml(edit?.attachment_url || "")}" placeholder="附件連結">
           </div>
         </div>
         <div class="wide btn-row">
@@ -433,6 +579,7 @@ function renderTxFilters() {
         <option value="">全部類型</option>
         <option value="income" ${state.filters.txType === "income" ? "selected" : ""}>收入</option>
         <option value="expense" ${state.filters.txType === "expense" ? "selected" : ""}>支出</option>
+        <option value="refund" ${state.filters.txType === "refund" ? "selected" : ""}>退款</option>
         <option value="transfer" ${state.filters.txType === "transfer" ? "selected" : ""}>轉帳</option>
       </select>
       <select class="input" id="filterTxCategory">${categoryOptions("", state.filters.txCategory)}</select>
@@ -461,10 +608,10 @@ function renderTxTable(rows) {
               <td>${escapeHtml(t.account_name || "")}${t.to_account_name ? ` → ${escapeHtml(t.to_account_name)}` : ""}</td>
               <td>${escapeHtml(t.category_name || "未分類")}</td>
               <td>${escapeHtml(t.budget_item_name || "")}</td>
-              <td class="mono ${t.type === "income" ? "good" : t.type === "expense" ? "bad" : ""}">${fmtMoney(t.amount)}</td>
+              <td class="mono ${(t.type === "income" || t.type === "refund") ? "good" : t.type === "expense" ? "bad" : ""}">${fmtMoney(t.amount)}</td>
               <td>${escapeHtml(t.merchant || "")}</td>
               <td>${escapeHtml(t.note || "")}</td>
-              <td><span class="badge">${escapeHtml(t.status)}</span></td>
+              <td><span class="badge">${escapeHtml(labelOf(t.status))}</span></td>
               <td class="actions">
                 <button class="btn small secondary" data-edit-tx="${t.id}">編輯</button>
                 <button class="btn small danger" data-delete="transactions:${t.id}">刪除</button>
@@ -556,7 +703,7 @@ function renderBudgetItemTable(rows) {
             return `
               <tr>
                 <td>${escapeHtml(i.name)}</td>
-                <td><span class="badge">${escapeHtml(i.item_type)}</span></td>
+                <td><span class="badge">${escapeHtml(labelOf(i.item_type))}</span></td>
                 <td>${escapeHtml(i.category_name || "")}</td>
                 <td class="mono">${fmtMoney(i.planned_amount)}</td>
                 <td class="mono bad">${fmtMoney(i.actual_amount)}</td>
@@ -621,7 +768,7 @@ function renderAccountTable(rows) {
           ${rows.map(a => `
             <tr>
               <td>${escapeHtml(a.name)}</td>
-              <td><span class="badge">${escapeHtml(a.type)}</span></td>
+              <td><span class="badge">${escapeHtml(labelOf(a.type))}</span></td>
               <td class="mono">${fmtMoney(a.initial_balance)}</td>
               <td class="mono ${Number(a.current_balance || 0) >= 0 ? "good" : "bad"}">${fmtMoney(a.current_balance)}</td>
               <td>${a.is_active ? "啟用" : "停用"}</td>
@@ -648,7 +795,7 @@ function renderCategories() {
           <input type="hidden" name="id" value="${escapeHtml(editCat?.id || "")}">
           ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editCat?.name || "")}" required>`)}
           ${field("類型", `<select class="input" name="type">${selectOpts(["income","expense","transfer"], editCat?.type || "expense")}</select>`)}
-          ${field("顏色", `<input class="input" name="color" value="${escapeHtml(editCat?.color || "#64748b")}">`)}
+          ${field("顏色", `<select class="input" name="color">${colorOptions(editCat?.color || "#64748b")}</select>`)}
           ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(editCat?.sort_order || 0)}">`)}
           <div class="wide btn-row">
             <button class="btn" type="submit">${editCat ? "儲存分類" : "新增分類"}</button>
@@ -662,7 +809,7 @@ function renderCategories() {
         <form id="tagForm" class="form-grid two">
           <input type="hidden" name="id" value="${escapeHtml(editTag?.id || "")}">
           ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editTag?.name || "")}" required>`)}
-          ${field("顏色", `<input class="input" name="color" value="${escapeHtml(editTag?.color || "#64748b")}">`)}
+          ${field("顏色", `<select class="input" name="color">${colorOptions(editTag?.color || "#64748b")}</select>`)}
           <div class="field wide"><label>備註</label><input class="input" name="note" value="${escapeHtml(editTag?.note || "")}"></div>
           <div class="wide btn-row">
             <button class="btn" type="submit">${editTag ? "儲存標籤" : "新增標籤"}</button>
@@ -691,11 +838,12 @@ function renderCategoryTable() {
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>排序</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>類型</th><th>顏色</th><th>排序</th><th>操作</th></tr></thead>
         <tbody>${rows.map(c => `
           <tr>
             <td>${escapeHtml(c.name)}</td>
-            <td><span class="badge ${escapeHtml(c.type)}">${escapeHtml(c.type)}</span></td>
+            <td><span class="badge ${escapeHtml(c.type)}">${escapeHtml(labelOf(c.type))}</span></td>
+            <td>${colorDot(c.color)}</td>
             <td>${escapeHtml(c.sort_order || 0)}</td>
             <td class="actions">
               <button class="btn small secondary" data-edit-category="${c.id}">編輯</button>
@@ -713,10 +861,11 @@ function renderTagTable() {
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>名稱</th><th>備註</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>顏色</th><th>備註</th><th>操作</th></tr></thead>
         <tbody>${rows.map(t => `
           <tr>
             <td><span class="badge">${escapeHtml(t.name)}</span></td>
+            <td>${colorDot(t.color)}</td>
             <td>${escapeHtml(t.note || "")}</td>
             <td class="actions">
               <button class="btn small secondary" data-edit-tag="${t.id}">編輯</button>
@@ -730,36 +879,40 @@ function renderTagTable() {
 
 function renderRecurring() {
   const edit = state.editing.recurring;
+  const type = edit?.type || state.draftRecurringType || "expense";
   return `
     <div class="card">
-      <h3>${edit ? "編輯定期交易" : "新增定期交易"}</h3>
+      <h3>${edit ? "編輯訂閱" : "新增訂閱"}</h3>
+      <p class="metric-sub">用來管理每月、每年或固定週期扣款。這裡是管理清單，不會自動新增流水帳。</p>
       <form id="recurringForm" class="form-grid">
         <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-        ${field("名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Netflix、房租、薪資">`)}
-        ${field("類型", `<select class="input" name="type">${selectOpts(["income","expense","transfer"], edit?.type || "expense")}</select>`)}
+        ${field("服務名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：串流平台、雲端空間、健身房">`)}
+        ${field("扣款類型", `<select class="input" name="type" id="recurringTypeInput">${selectOpts(["expense","income","transfer"], type)}</select>`)}
         ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
-        ${field("帳戶", `<select class="input" name="account_id" required>${accountOptions(edit?.account_id || "")}</select>`)}
+        ${field("付款帳戶", `<select class="input" name="account_id" required>${accountOptions(edit?.account_id || "")}</select>`)}
         ${field("轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`)}
-        ${field("分類", `<select class="input" name="category_id">${categoryOptions(edit?.type || "expense", edit?.category_id || "")}</select>`)}
+        ${field("分類", `<select class="input" name="category_id">${categoryOptions(type, edit?.category_id || "")}</select>`)}
         ${field("預算項目", `<select class="input" name="budget_item_id">${budgetItemOptions(edit?.budget_item_id || "")}</select>`)}
-        ${field("頻率", `<select class="input" name="frequency">${selectOpts(["daily","weekly","monthly","quarterly","yearly","custom"], edit?.frequency || "monthly")}</select>`)}
-        ${field("間隔", `<input class="input" type="number" min="1" name="interval_count" value="${escapeHtml(edit?.interval_count || 1)}">`)}
+        ${field("付款週期", `<select class="input" name="frequency">${selectOpts(["monthly","yearly","weekly","quarterly","daily","custom"], edit?.frequency || "monthly")}</select>`)}
+        ${field("每幾期扣一次", `<input class="input" type="number" min="1" name="interval_count" value="${escapeHtml(edit?.interval_count || 1)}">`)}
         ${field("開始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(edit?.start_date || today())}" required>`)}
-        ${field("下次日期", `<input class="input" type="date" name="next_due_date" value="${escapeHtml(edit?.next_due_date || today())}" required>`)}
+        ${field("下次扣款日", `<input class="input" type="date" name="next_due_date" value="${escapeHtml(edit?.next_due_date || today())}" required>`)}
         ${field("結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(edit?.end_date || "")}">`)}
-        ${field("啟用", `<select class="input" name="is_active">
-          <option value="true" ${edit?.is_active !== false ? "selected" : ""}>啟用</option>
-          <option value="false" ${edit?.is_active === false ? "selected" : ""}>停用</option>
+        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="例：信用卡、轉帳、電子支付">`)}
+        ${field("服務商", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="例：串流平台、音樂平台、雲端空間">`)}
+        ${field("狀態", `<select class="input" name="is_active">
+          <option value="true" ${edit?.is_active !== false ? "selected" : ""}>使用中</option>
+          <option value="false" ${edit?.is_active === false ? "selected" : ""}>已取消 / 停用</option>
         </select>`)}
-        <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(edit?.note || "")}</textarea></div>
+        <div class="field wide"><label>備註 / 取消方式</label><textarea class="input" name="note" placeholder="例：取消入口、客服連結、方案內容、是否值得續訂">${escapeHtml(edit?.note || "")}</textarea></div>
         <div class="wide btn-row">
-          <button class="btn" type="submit">${edit ? "儲存修改" : "新增定期交易"}</button>
+          <button class="btn" type="submit">${edit ? "儲存訂閱" : "新增訂閱"}</button>
           ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="recurring">取消編輯</button>` : ""}
         </div>
       </form>
     </div>
     <div class="card">
-      <h3>定期交易列表</h3>
+      <h3>訂閱列表</h3>
       ${renderRecurringTable()}
     </div>
   `;
@@ -767,13 +920,13 @@ function renderRecurring() {
 
 function renderRecurringTable() {
   const rows = state.data.recurring;
-  if (!rows.length) return `<div class="empty">尚無定期交易</div>`;
+  if (!rows.length) return `<div class="empty">尚無訂閱</div>`;
   const accountMap = Object.fromEntries(state.data.accounts.map(a => [a.id, a.name]));
   const catMap = Object.fromEntries(state.data.categories.map(c => [c.id, c.name]));
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>金額</th><th>帳戶</th><th>分類</th><th>頻率</th><th>下次日期</th><th>狀態</th><th>操作</th></tr></thead>
+        <thead><tr><th>服務名稱</th><th>類型</th><th>金額</th><th>付款帳戶</th><th>分類</th><th>付款週期</th><th>下次扣款日</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody>${rows.map(r => `
           <tr>
             <td>${escapeHtml(r.name)}</td>
@@ -781,9 +934,9 @@ function renderRecurringTable() {
             <td class="mono">${fmtMoney(r.amount)}</td>
             <td>${escapeHtml(accountMap[r.account_id] || "")}</td>
             <td>${escapeHtml(catMap[r.category_id] || "")}</td>
-            <td>${escapeHtml(r.frequency)} / ${escapeHtml(r.interval_count || 1)}</td>
+            <td>${escapeHtml(labelOf(r.frequency))} / ${escapeHtml(r.interval_count || 1)}</td>
             <td>${escapeHtml(r.next_due_date || "")}</td>
-            <td>${r.is_active ? "啟用" : "停用"}</td>
+            <td>${r.is_active ? "使用中" : "已取消"}</td>
             <td class="actions">
               <button class="btn small secondary" data-edit-recurring="${r.id}">編輯</button>
               <button class="btn small danger" data-delete="recurring_transactions:${r.id}">刪除</button>
@@ -858,7 +1011,7 @@ function renderCreditCardTable() {
           <td>${escapeHtml(accountMap[c.account_id] || "")}</td>
           <td class="mono">${fmtMoney(c.credit_limit)}</td>
           <td>${escapeHtml(c.statement_day || "-")} / ${escapeHtml(c.payment_due_day || "-")}</td>
-          <td>${escapeHtml(c.reward_type || "none")} ${c.reward_rate ? `${fmtNumber(c.reward_rate, 2)}%` : ""}</td>
+          <td>${escapeHtml(labelOf(c.reward_type || "none"))} ${c.reward_rate ? `${fmtNumber(c.reward_rate, 2)}%` : ""}</td>
           <td class="actions">
             <button class="btn small secondary" data-edit-card="${c.id}">編輯</button>
             <button class="btn small danger" data-delete="credit_cards:${c.id}">刪除</button>
@@ -877,11 +1030,11 @@ function renderLoanTable() {
       <tbody>${rows.map(l => `
         <tr>
           <td>${escapeHtml(l.name)}</td>
-          <td><span class="badge">${escapeHtml(l.loan_type)}</span></td>
+          <td><span class="badge">${escapeHtml(labelOf(l.loan_type))}</span></td>
           <td class="mono bad">${fmtMoney(l.remaining_principal)}</td>
           <td>${fmtNumber(l.annual_interest_rate, 2)}%</td>
           <td class="mono">${fmtMoney(l.monthly_payment)}</td>
-          <td>${escapeHtml(l.status)}</td>
+          <td>${escapeHtml(labelOf(l.status))}</td>
           <td class="actions">
             <button class="btn small secondary" data-edit-loan="${l.id}">編輯</button>
             <button class="btn small danger" data-delete="loans:${l.id}">刪除</button>
@@ -931,11 +1084,11 @@ function renderGoalCards() {
           <div class="card">
             <div class="card-title-row">
               <h3>${escapeHtml(g.name)}</h3>
-              <span class="badge">${escapeHtml(g.status)}</span>
+              <span class="badge">${escapeHtml(labelOf(g.status))}</span>
             </div>
             <div class="metric-value">${fmtNumber(pct, 1)}%</div>
             <div class="progress"><span style="width:${pct}%"></span></div>
-            <p class="metric-sub">${fmtMoney(g.current_amount)} / ${fmtMoney(g.target_amount)} · ${escapeHtml(g.goal_type)}</p>
+            <p class="metric-sub">${fmtMoney(g.current_amount)} / ${fmtMoney(g.target_amount)} · ${escapeHtml(labelOf(g.goal_type))}</p>
             <div class="btn-row">
               <button class="btn small secondary" data-edit-goal="${g.id}">編輯</button>
               <button class="btn small danger" data-delete="goals:${g.id}">刪除</button>
@@ -950,12 +1103,12 @@ function renderGoalCards() {
 function renderReports() {
   return `
     <div class="grid cols-2">
-      <div class="card"><h3>分類支出</h3>${renderCategoryChart("expense", 14)}</div>
+      <div class="card"><h3>分類淨支出</h3>${renderCategoryChart("expense", 14)}</div>
       <div class="card"><h3>月現金流</h3>${renderMonthlyChart(14)}</div>
     </div>
     <div class="card">
-      <h3>類 T 字帳</h3>
-      <p class="metric-sub">支出：借記費用、貸記資產；收入：借記資產、貸記收入；轉帳：借記轉入資產、貸記轉出資產。</p>
+      <h3>借貸帳</h3>
+      <p class="metric-sub">支出：借記費用、貸記資產；退款：借記資產、貸記費用退款；收入：借記資產、貸記收入；轉帳：借記轉入資產、貸記轉出資產。</p>
       ${renderTAccountTable()}
     </div>
   `;
@@ -969,14 +1122,17 @@ function renderTAccountTable() {
     let debit = "";
     let credit = "";
     if (t.type === "expense") {
-      debit = `Expense: ${category}`;
-      credit = `Asset: ${account}`;
+      debit = `費用：${category}`;
+      credit = `資產：${account}`;
+    } else if (t.type === "refund") {
+      debit = `資產：${account}`;
+      credit = `費用退款：${category}`;
     } else if (t.type === "income") {
-      debit = `Asset: ${account}`;
-      credit = `Income: ${category}`;
+      debit = `資產：${account}`;
+      credit = `收入：${category}`;
     } else {
-      debit = `Asset: ${to}`;
-      credit = `Asset: ${account}`;
+      debit = `資產：${to}`;
+      credit = `資產：${account}`;
     }
     return { ...t, debit, credit };
   });
@@ -1001,16 +1157,15 @@ function renderSettings() {
     <div class="grid cols-2">
       <div class="card">
         <h3>連線設定</h3>
-        <p class="metric-sub">目前 Project URL：</p>
-        <p class="mono">${escapeHtml(APP_CONFIG.SUPABASE_URL)}</p>
-        <p class="metric-sub">若讀不到資料，先確認：已在 Supabase SQL Editor 執行 schema.sql，且沒有按「Run and enable RLS」導致缺少 policy。</p>
+        <p class="metric-sub">目前已使用設定檔連到後端資料庫。</p>
+        <p class="metric-sub">若讀不到資料，先確認：已在後端資料庫編輯器執行資料庫結構檔，且沒有直接開啟列層級安全規則導致缺少存取規則。</p>
       </div>
       <div class="card">
         <h3>資料匯出</h3>
-        <p class="metric-sub">匯出目前年度流水帳 CSV，或下載前端目前快取的 JSON。</p>
+        <p class="metric-sub">匯出目前年度流水帳表格，或下載畫面目前暫存的資料備份。</p>
         <div class="btn-row">
-          <button class="btn secondary" id="exportCsvBtn">匯出目前年度 CSV</button>
-          <button class="btn secondary" id="downloadJsonBtn">下載快取 JSON</button>
+          <button class="btn secondary" id="exportCsvBtn">匯出目前年度表格</button>
+          <button class="btn secondary" id="downloadJsonBtn">下載暫存資料</button>
         </div>
       </div>
     </div>
@@ -1018,7 +1173,7 @@ function renderSettings() {
     <div class="card">
       <h3>重要限制</h3>
       <p class="metric-sub">
-        這版沒有 Auth / RLS，適合單人測試或非敏感資料。若要公開長期使用，應改成 Supabase Auth + Row Level Security。
+        這版沒有 登入驗證 / 列層級安全規則，適合單人測試或非敏感資料。若要公開長期使用，應改成 登入驗證與列層級安全規則。
       </p>
     </div>
   `;
@@ -1071,7 +1226,7 @@ function field(label, html) {
 }
 
 function selectOpts(values, selected) {
-  return values.map(v => `<option value="${escapeHtml(v)}" ${String(v) === String(selected) ? "selected" : ""}>${escapeHtml(v)}</option>`).join("");
+  return values.map(v => `<option value="${escapeHtml(v)}" ${String(v) === String(selected) ? "selected" : ""}>${escapeHtml(labelOf(v))}</option>`).join("");
 }
 
 function readForm(form) {
@@ -1142,6 +1297,7 @@ async function saveTransaction(form) {
     to_account_id: d.type === "transfer" ? d.to_account_id : null,
     category_id: d.category_id || null,
     budget_item_id: d.budget_item_id || null,
+    related_transaction_id: d.related_transaction_id || null,
     amount: numberOrZero(d.amount),
     merchant: d.merchant,
     payment_method: d.payment_method,
@@ -1243,6 +1399,8 @@ async function saveRecurring(form) {
     start_date: d.start_date,
     end_date: d.end_date,
     next_due_date: d.next_due_date,
+    merchant: d.merchant,
+    payment_method: d.payment_method,
     note: d.note,
     is_active: boolValue(d.is_active)
   };
@@ -1314,7 +1472,20 @@ function bindRenderedEvents() {
 
   const txTypeInput = $("#txTypeInput");
   if (txTypeInput) {
-    txTypeInput.addEventListener("change", () => render());
+    txTypeInput.addEventListener("change", e => {
+      if (state.editing.transaction) state.editing.transaction.type = e.target.value;
+      state.draftTxType = e.target.value;
+      render();
+    });
+  }
+
+  const recurringTypeInput = $("#recurringTypeInput");
+  if (recurringTypeInput) {
+    recurringTypeInput.addEventListener("change", e => {
+      if (state.editing.recurring) state.editing.recurring.type = e.target.value;
+      state.draftRecurringType = e.target.value;
+      render();
+    });
   }
 
   $("#filterTxSearch")?.addEventListener("input", e => { state.filters.txSearch = e.target.value; render(); });
@@ -1369,7 +1540,7 @@ function bindRenderedEvents() {
 
   $$("[data-delete]").forEach(btn => btn.addEventListener("click", async () => {
     const [table, id] = btn.dataset.delete.split(":");
-    const ok = await confirmAction("確認刪除", `確定要刪除 ${table} 的這筆資料？刪除後無法從前端復原。`);
+    const ok = await confirmAction("確認刪除", `確定要刪除「${tableLabel(table)}」這筆資料？刪除後無法從畫面復原。`);
     if (!ok) return;
     try {
       await removeRow(table, id);
@@ -1432,7 +1603,7 @@ function downloadFile(filename, content, mime = "text/plain;charset=utf-8") {
 
 function exportCurrentYearCsv() {
   const rows = applyTxFilters(transactionsForSelectedYear());
-  downloadFile(`transactions_${state.selectedBudgetYear}.csv`, toCsv(rows), "text/csv;charset=utf-8");
+  downloadFile(`流水帳_${state.selectedBudgetYear}.csv`, toCsv(rows), "text/csv;charset=utf-8");
 }
 
 function downloadCacheJson() {
@@ -1442,7 +1613,7 @@ function downloadCacheJson() {
 async function init() {
   if (!window.supabase || !window.APP_CONFIG) {
     setConnection(false, "前端套件未載入");
-    showAlert("Supabase JS 或 config.js 未載入。請確認網路與檔案路徑。", "bad");
+    showAlert("資料庫前端套件或設定檔未載入。請確認網路與檔案路徑。", "bad");
     return;
   }
 

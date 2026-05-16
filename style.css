@@ -234,6 +234,7 @@ td.actions { width: 126px; }
 .badge.income { background: rgba(52,211,153,.12); color: #bbf7d0; border-color: rgba(52,211,153,.24); }
 .badge.expense { background: rgba(251,113,133,.12); color: #fecdd3; border-color: rgba(251,113,133,.24); }
 .badge.transfer { background: rgba(148,163,184,.12); color: #cbd5e1; border-color: rgba(148,163,184,.24); }
+.badge.refund { background: rgba(56,189,248,.12); color: #bae6fd; border-color: rgba(56,189,248,.24); }
 
 .progress {
   height: 10px;
@@ -316,4 +317,14 @@ td.actions { width: 126px; }
   .app-shell { display: block; }
   .card { box-shadow: none; border-color: #e5e7eb; background: #fff; }
   .content { padding: 0; }
+}
+
+.color-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-right: 8px;
+  vertical-align: middle;
+  border: 1px solid rgba(255,255,255,.35);
 }

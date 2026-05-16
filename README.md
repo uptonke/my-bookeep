@@ -1,46 +1,48 @@
-# 個人記帳系統 — Supabase 版
+# 個人記帳系統
 
-## 檔案
+## 使用方式
 
-- `index.html`：主畫面
-- `style.css`：樣式
-- `script.js`：前端邏輯
-- `config.js`：Supabase 連線設定
-- `schema.sql`：資料庫 schema
+如果是全新資料庫：
 
-## 使用步驟
+1. 到後端資料庫的資料庫編輯器執行 `schema.sql`。
+2. 把 `index.html`、`style.css`、`script.js`、`config.js` 上傳到網站專案。
+3. 開啟網頁後測試新增年度、帳戶、分類、預算項目與交易。
 
-1. 到 Supabase 新 project。
-2. 開啟 `SQL Editor`。
-3. 貼上 `schema.sql`，按 `Run without RLS`。
-4. 把整包檔案上傳到 GitHub repo。
-5. 開 GitHub Pages。
-6. 開啟網頁後測試新增帳戶、年度預算、流水帳。
+如果你已經執行過舊版資料庫結構：
 
-## 重要注意
+1. 不要重跑 `schema.sql`。
+2. 到資料庫編輯器執行 `migration_v2_refund_subscription.sql`。
+3. 再上傳新版前端檔案。
 
-你貼的 `sb_publishable_...` 不是 Project URL。  
-我已用 anon JWT 裡的 project ref 推出：
+## 這版新增什麼
 
-```txt
-https://nsopmqzuuwkryyvfvgtj.supabase.co
-```
+1. 流水帳新增「退款」類型。
+2. 退款可以關聯原本那筆支出。
+3. 預算與分類報表改成看「淨支出」，退款會扣回支出。
+4. 「定期交易」改成「訂閱管理」。
+5. 訂閱管理改成服務名稱、付款週期、下次扣款日、使用中或已取消。
 
-如果連線失敗，到 Supabase：
+## 退款怎麼記
 
-```txt
-Project Settings → API → Project URL
-```
+不要刪原本支出。新增一筆「退款」：
 
-把真正 URL 複製到 `config.js` 的 `SUPABASE_URL`。
+- 類型：退款
+- 帳戶：退款回來的帳戶
+- 分類：跟原支出相同
+- 預算項目：跟原支出相同
+- 關聯原支出：選原本那筆消費
 
-## 安全提醒
+## 收據與附件連結
 
-這版是單人測試版：
+目前版本不會直接上傳檔案。
+如果你有收據照片、發票圖片、保固書或合約，可以先上傳到雲端空間，再把分享連結貼到交易裡。
 
-- 沒有 Auth
-- 沒有 RLS
-- 前端直接用 anon key
-- 不適合放敏感真實帳務資料
+不需要管理收據時，這兩個欄位可以直接留空。
 
-正式版應改成 Supabase Auth + Row Level Security。
+## 顏色
+
+分類與標籤的顏色已改成中文選單，不需要手動輸入色號。
+
+## 注意
+
+這是單人測試版，沒有登入驗證與列層級資料隔離。不要放敏感真實帳務。
