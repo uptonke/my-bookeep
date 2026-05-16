@@ -310,6 +310,12 @@ async function queryTable(name, options = {}) {
   return data || [];
 }
 
+async function loadRecurringOnly() {
+  const rows = await queryTable("recurring_transactions", { order: { column: "next_due_date", ascending: true } });
+  state.data.recurring = rows;
+  return rows;
+}
+
 async function loadAll() {
   state.loading = true;
   state.loadErrors = [];
@@ -899,32 +905,29 @@ function renderTagTable() {
 
 function renderRecurring() {
   const edit = state.editing.recurring;
-  const type = edit?.type || state.draftRecurringType || "expense";
   return `
     <div class="card">
       <h3>${edit ? "編輯訂閱" : "新增訂閱"}</h3>
-      <p class="metric-sub">用來管理每月、每年或固定週期扣款。這裡是管理清單，不會自動新增流水帳。</p>
+      <p class="metric-sub">這裡只管理固定扣款支出，例如串流、雲端、健身房、手機費。它不會自動新增流水帳。</p>
       <form id="recurringForm" class="form-grid">
         <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-        ${field("服務名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：串流平台、雲端空間、健身房">`)}
-        ${field("扣款類型", `<select class="input" name="type" id="recurringTypeInput">${selectOpts(["expense","income","transfer"], type)}</select>`)}
-        ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
+        ${field("服務名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Netflix、Spotify、iCloud、ChatGPT">`)}
+        ${field("金額", `<input class="input" type="number" step="1" min="0" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
         ${field("付款帳戶", `<select class="input" name="account_id" required>${accountOptions(edit?.account_id || "")}</select>`)}
-        ${field("轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`)}
-        ${field("分類", `<select class="input" name="category_id">${categoryOptions(type, edit?.category_id || "")}</select>`)}
+        ${field("分類", `<select class="input" name="category_id">${categoryOptions("expense", edit?.category_id || "")}</select>`)}
         ${field("預算項目", `<select class="input" name="budget_item_id">${budgetItemOptions(edit?.budget_item_id || "")}</select>`)}
         ${field("付款週期", `<select class="input" name="frequency">${selectOpts(["monthly","yearly","weekly","quarterly","daily","custom"], edit?.frequency || "monthly")}</select>`)}
         ${field("每幾期扣一次", `<input class="input" type="number" min="1" name="interval_count" value="${escapeHtml(edit?.interval_count || 1)}">`)}
         ${field("開始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(edit?.start_date || today())}" required>`)}
         ${field("下次扣款日", `<input class="input" type="date" name="next_due_date" value="${escapeHtml(edit?.next_due_date || today())}" required>`)}
         ${field("結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(edit?.end_date || "")}">`)}
-        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="例：信用卡、轉帳、電子支付">`)}
-        ${field("服務商", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="例：串流平台、音樂平台、雲端空間">`)}
+        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="例：信用卡、銀行扣款、電子支付">`)}
+        ${field("服務商", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="例：Netflix、Apple、Google、OpenAI">`)}
         ${field("狀態", `<select class="input" name="is_active">
           <option value="true" ${edit?.is_active !== false ? "selected" : ""}>使用中</option>
           <option value="false" ${edit?.is_active === false ? "selected" : ""}>已取消 / 停用</option>
         </select>`)}
-        <div class="field wide"><label>備註 / 取消方式</label><textarea class="input" name="note" placeholder="例：取消入口、客服連結、方案內容、是否值得續訂">${escapeHtml(edit?.note || "")}</textarea></div>
+        <div class="field wide"><label>備註 / 取消方式</label><textarea class="input" name="note" placeholder="例：取消入口、方案內容、是否值得續訂">${escapeHtml(edit?.note || "")}</textarea></div>
         <div class="wide btn-row">
           <button class="btn" type="submit">${edit ? "儲存訂閱" : "新增訂閱"}</button>
           ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="recurring">取消編輯</button>` : ""}
@@ -932,7 +935,10 @@ function renderRecurring() {
       </form>
     </div>
     <div class="card">
-      <h3>訂閱列表</h3>
+      <div class="card-title-row">
+        <h3>訂閱列表</h3>
+        <button class="btn small secondary" id="refreshRecurringBtn" type="button">重新讀取訂閱</button>
+      </div>
       ${renderRecurringTable()}
     </div>
   `;
@@ -1296,11 +1302,12 @@ async function handleSubmit(event) {
     if (form.id === "categoryForm") await saveCategory(form);
     if (form.id === "tagForm") await saveTag(form);
     if (form.id === "recurringForm") {
-      const saved = await saveRecurring(form);
-      if (saved?.id) {
-        state.data.recurring = [saved, ...state.data.recurring.filter(row => row.id !== saved.id)]
-          .sort((a, b) => String(a.next_due_date || "").localeCompare(String(b.next_due_date || "")));
-      }
+      await saveRecurring(form);
+      await loadRecurringOnly();
+      clearEditing();
+      render();
+      showAlert("訂閱已儲存，並已重新讀取訂閱列表。", "good");
+      return;
     }
     if (form.id === "creditCardForm") await saveCreditCard(form);
     if (form.id === "loanForm") await saveLoan(form);
@@ -1410,26 +1417,35 @@ async function saveTag(form) {
 
 async function saveRecurring(form) {
   const d = readForm(form);
+  if (!d.name) throw new Error("請輸入服務名稱");
+  if (!d.account_id) throw new Error("請選擇付款帳戶");
+  if (!Number(d.amount)) throw new Error("請輸入金額");
+  if (!d.start_date) throw new Error("請選擇開始日");
+  if (!d.next_due_date) throw new Error("請選擇下次扣款日");
+
   const payload = {
     id: d.id || undefined,
     name: d.name,
-    type: d.type,
+    type: "expense",
     account_id: d.account_id,
-    to_account_id: d.type === "transfer" ? d.to_account_id : null,
+    to_account_id: null,
     category_id: d.category_id || null,
     budget_item_id: d.budget_item_id || null,
     amount: numberOrZero(d.amount),
     frequency: d.frequency || "monthly",
     interval_count: Number(d.interval_count || 1),
     start_date: d.start_date,
-    end_date: d.end_date,
+    end_date: d.end_date || null,
     next_due_date: d.next_due_date,
-    merchant: d.merchant,
-    payment_method: d.payment_method,
-    note: d.note,
+    merchant: d.merchant || null,
+    payment_method: d.payment_method || null,
+    note: d.note || null,
     is_active: boolValue(d.is_active)
   };
-  return await upsert("recurring_transactions", payload);
+
+  const saved = await upsert("recurring_transactions", payload);
+  if (!saved || !saved.id) throw new Error("訂閱寫入後沒有回傳資料，請檢查 Supabase 權限或網路狀態");
+  return saved;
 }
 
 async function saveCreditCard(form) {
@@ -1510,6 +1526,16 @@ function bindRenderedEvents() {
       render();
     });
   }
+
+  $("#refreshRecurringBtn")?.addEventListener("click", async () => {
+    try {
+      const rows = await loadRecurringOnly();
+      render();
+      showAlert(`已重新讀取訂閱列表：${rows.length} 筆。`, "good");
+    } catch (error) {
+      showAlert(`重新讀取訂閱失敗：${escapeHtml(error.message)}`, "bad");
+    }
+  });
 
   $("#filterTxSearch")?.addEventListener("input", e => { state.filters.txSearch = e.target.value; render(); });
   $("#filterTxType")?.addEventListener("change", e => { state.filters.txType = e.target.value; render(); });
