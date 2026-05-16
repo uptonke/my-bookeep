@@ -1,5 +1,7 @@
 /* global supabase, APP_CONFIG */
 
+const APP_VERSION = "v8";
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
@@ -59,7 +61,7 @@ const pageMeta = {
   budget: ["年度預算", "年度預算項目、結轉與預算使用率"],
   accounts: ["帳戶", "現金、銀行、電子支付、信用卡與其他帳戶"],
   categories: ["分類 / 標籤", "收支分類與交易標籤管理"],
-  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態"],
+  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v8"],
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
@@ -909,6 +911,7 @@ function renderRecurring() {
     <div class="card">
       <h3>${edit ? "編輯訂閱" : "新增訂閱"}</h3>
       <p class="metric-sub">這裡只管理固定扣款支出，例如串流、雲端、健身房、手機費。它不會自動新增流水帳。</p>
+      <p class="metric-sub">目前前端版本：v8。如果你看不到 v8，代表 GitHub Pages 或瀏覽器還在用舊版。</p>
       <form id="recurringForm" class="form-grid">
         <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
         ${field("服務名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Netflix、Spotify、iCloud、ChatGPT">`)}
@@ -1302,11 +1305,15 @@ async function handleSubmit(event) {
     if (form.id === "categoryForm") await saveCategory(form);
     if (form.id === "tagForm") await saveTag(form);
     if (form.id === "recurringForm") {
-      await saveRecurring(form);
-      await loadRecurringOnly();
+      const saved = await saveRecurring(form);
+      const rows = await loadRecurringOnly();
+      const found = rows.some(row => String(row.id) === String(saved.id));
+      if (!found) {
+        throw new Error(`訂閱已送出但重新讀取後找不到資料。寫入 id=${saved.id || "無"}，目前列表 ${rows.length} 筆。請檢查是否連到同一個 Supabase 專案。`);
+      }
       clearEditing();
       render();
-      showAlert("訂閱已儲存，並已重新讀取訂閱列表。", "good");
+      showAlert(`訂閱已寫入資料庫：${escapeHtml(saved.name)}。目前列表 ${rows.length} 筆。`, "good");
       return;
     }
     if (form.id === "creditCardForm") await saveCreditCard(form);
@@ -1424,7 +1431,6 @@ async function saveRecurring(form) {
   if (!d.next_due_date) throw new Error("請選擇下次扣款日");
 
   const payload = {
-    id: d.id || undefined,
     name: d.name,
     type: "expense",
     account_id: d.account_id,
@@ -1443,9 +1449,46 @@ async function saveRecurring(form) {
     is_active: boolValue(d.is_active)
   };
 
-  const saved = await upsert("recurring_transactions", payload);
-  if (!saved || !saved.id) throw new Error("訂閱寫入後沒有回傳資料，請檢查 Supabase 權限或網路狀態");
-  return saved;
+  let response;
+  if (d.id) {
+    response = await state.client
+      .from("recurring_transactions")
+      .update(payload)
+      .eq("id", d.id)
+      .select("*")
+      .single();
+  } else {
+    response = await state.client
+      .from("recurring_transactions")
+      .insert([payload])
+      .select("*")
+      .single();
+  }
+
+  if (response.error) {
+    const err = response.error;
+    throw new Error(`訂閱寫入失敗：${err.message || "未知錯誤"}${err.details ? `｜${err.details}` : ""}${err.hint ? `｜提示：${err.hint}` : ""}`);
+  }
+
+  const saved = response.data;
+  if (!saved || !saved.id) {
+    throw new Error("訂閱寫入後沒有回傳 id。這不應該顯示成功，請檢查 Supabase 回傳內容。");
+  }
+
+  const verify = await state.client
+    .from("recurring_transactions")
+    .select("*")
+    .eq("id", saved.id)
+    .maybeSingle();
+
+  if (verify.error) {
+    throw new Error(`訂閱驗證讀取失敗：${verify.error.message}`);
+  }
+  if (!verify.data) {
+    throw new Error(`訂閱寫入後驗證失敗：找不到 id=${saved.id} 的資料。`);
+  }
+
+  return verify.data;
 }
 
 async function saveCreditCard(form) {
