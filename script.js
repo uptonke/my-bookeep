@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v8";
+const APP_VERSION = "v9";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -61,7 +61,7 @@ const pageMeta = {
   budget: ["年度預算", "年度預算項目、結轉與預算使用率"],
   accounts: ["帳戶", "現金、銀行、電子支付、信用卡與其他帳戶"],
   categories: ["分類 / 標籤", "收支分類與交易標籤管理"],
-  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v8"],
+  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v9"],
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
@@ -911,7 +911,7 @@ function renderRecurring() {
     <div class="card">
       <h3>${edit ? "編輯訂閱" : "新增訂閱"}</h3>
       <p class="metric-sub">這裡只管理固定扣款支出，例如串流、雲端、健身房、手機費。它不會自動新增流水帳。</p>
-      <p class="metric-sub">目前前端版本：v8。如果你看不到 v8，代表 GitHub Pages 或瀏覽器還在用舊版。</p>
+      <p class="metric-sub">目前前端版本：v9。如果你看不到 v9，代表 GitHub Pages 或瀏覽器還在用舊版。</p>
       <form id="recurringForm" class="form-grid">
         <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
         ${field("服務名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Netflix、Spotify、iCloud、ChatGPT">`)}
@@ -1272,21 +1272,48 @@ function boolValue(value) {
   return value === "true" || value === true;
 }
 
-async function upsert(table, payload) {
-  const clean = { ...payload };
-  Object.keys(clean).forEach(k => clean[k] === undefined && delete clean[k]);
-  const query = clean.id
-    ? state.client.from(table).upsert(clean).select().single()
-    : state.client.from(table).insert(clean).select().single();
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
+function formatSupabaseError(error) {
+  if (!error) return "未知錯誤";
+  return [
+    error.message,
+    error.details ? `細節：${error.details}` : "",
+    error.hint ? `提示：${error.hint}` : "",
+    error.code ? `代碼：${error.code}` : ""
+  ].filter(Boolean).join("｜");
+}
+
+function assertSavedRow(table, data, action = "寫入") {
+  if (!data) {
+    throw new Error(`${action}失敗：資料庫沒有回傳資料。可能是權限、資料表規則、RLS 或前端欄位問題。表：${table}`);
+  }
+  if (!data.id) {
+    throw new Error(`${action}失敗：資料庫有回應，但沒有回傳 id。表：${table}`);
+  }
   return data;
 }
 
+async function upsert(table, payload) {
+  const clean = { ...payload };
+  Object.keys(clean).forEach(k => clean[k] === undefined && delete clean[k]);
+
+  const query = clean.id
+    ? state.client.from(table).upsert(clean).select("*").single()
+    : state.client.from(table).insert(clean).select("*").single();
+
+  const { data, error } = await query;
+  if (error) throw new Error(formatSupabaseError(error));
+  return assertSavedRow(table, data, clean.id ? "更新" : "新增");
+}
+
 async function insert(table, payload) {
-  const { data, error } = await state.client.from(table).insert(payload).select().single();
-  if (error) throw new Error(error.message);
-  return data;
+  const clean = Array.isArray(payload) ? payload : [payload];
+  const { data, error } = await state.client.from(table).insert(clean).select("*");
+  if (error) throw new Error(formatSupabaseError(error));
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error(`新增失敗：資料庫沒有回傳新增資料。表：${table}`);
+  }
+  data.forEach(row => assertSavedRow(table, row, "新增"));
+  return Array.isArray(payload) ? data : data[0];
 }
 
 async function removeRow(table, id) {
@@ -1305,16 +1332,7 @@ async function handleSubmit(event) {
     if (form.id === "categoryForm") await saveCategory(form);
     if (form.id === "tagForm") await saveTag(form);
     if (form.id === "recurringForm") {
-      const saved = await saveRecurring(form);
-      const rows = await loadRecurringOnly();
-      const found = rows.some(row => String(row.id) === String(saved.id));
-      if (!found) {
-        throw new Error(`訂閱已送出但重新讀取後找不到資料。寫入 id=${saved.id || "無"}，目前列表 ${rows.length} 筆。請檢查是否連到同一個 Supabase 專案。`);
-      }
-      clearEditing();
-      render();
-      showAlert(`訂閱已寫入資料庫：${escapeHtml(saved.name)}。目前列表 ${rows.length} 筆。`, "good");
-      return;
+      throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v9。");
     }
     if (form.id === "creditCardForm") await saveCreditCard(form);
     if (form.id === "loanForm") await saveLoan(form);
@@ -1322,9 +1340,29 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert("已儲存。", "good");
+    showAlert("v9 驗證通過：已寫入資料庫。", "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
+  }
+}
+
+async function handleRecurringSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  try {
+    const saved = await saveRecurring(form);
+    const rows = await loadRecurringOnly();
+    const found = rows.some(row => String(row.id) === String(saved.id));
+
+    if (!found) {
+      throw new Error(`v9 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
+    }
+
+    state.editing.recurring = null;
+    render();
+    showAlert(`v9 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+  } catch (error) {
+    showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
 }
 
@@ -1460,20 +1498,16 @@ async function saveRecurring(form) {
   } else {
     response = await state.client
       .from("recurring_transactions")
-      .insert([payload])
+      .insert(payload)
       .select("*")
       .single();
   }
 
   if (response.error) {
-    const err = response.error;
-    throw new Error(`訂閱寫入失敗：${err.message || "未知錯誤"}${err.details ? `｜${err.details}` : ""}${err.hint ? `｜提示：${err.hint}` : ""}`);
+    throw new Error(`訂閱寫入失敗：${formatSupabaseError(response.error)}`);
   }
 
-  const saved = response.data;
-  if (!saved || !saved.id) {
-    throw new Error("訂閱寫入後沒有回傳 id。這不應該顯示成功，請檢查 Supabase 回傳內容。");
-  }
+  const saved = assertSavedRow("recurring_transactions", response.data, d.id ? "訂閱更新" : "訂閱新增");
 
   const verify = await state.client
     .from("recurring_transactions")
@@ -1482,9 +1516,9 @@ async function saveRecurring(form) {
     .maybeSingle();
 
   if (verify.error) {
-    throw new Error(`訂閱驗證讀取失敗：${verify.error.message}`);
+    throw new Error(`訂閱驗證讀取失敗：${formatSupabaseError(verify.error)}`);
   }
-  if (!verify.data) {
+  if (!verify.data || !verify.data.id) {
     throw new Error(`訂閱寫入後驗證失敗：找不到 id=${saved.id} 的資料。`);
   }
 
@@ -1543,7 +1577,8 @@ function clearEditing() {
 }
 
 function bindRenderedEvents() {
-  $$("form").forEach(form => form.addEventListener("submit", handleSubmit));
+  $("#recurringForm")?.addEventListener("submit", handleRecurringSubmit);
+  $$("form").filter(form => form.id !== "recurringForm").forEach(form => form.addEventListener("submit", handleSubmit));
 
   $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
 
