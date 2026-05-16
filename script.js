@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v11";
+const APP_VERSION = "v12";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -61,7 +61,7 @@ const pageMeta = {
   budget: ["年度預算", "年度預算項目、結轉與預算使用率"],
   accounts: ["帳戶", "現金、銀行、電子支付、信用卡與其他帳戶"],
   categories: ["分類 / 標籤", "收支分類與交易標籤管理"],
-  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v10"],
+  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v12"],
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
@@ -257,8 +257,8 @@ function categoryOptions(type = "", selected = "") {
 }
 
 function expenseTransactionOptions(selected = "") {
-  const rows = state.data.transactionView
-    .filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear) && t.type === "expense" && t.status !== "cancelled")
+  const rows = transactionsForSelectedYear()
+    .filter(t => t.type === "expense" && t.status !== "cancelled")
     .sort((a, b) => String(b.transaction_date).localeCompare(String(a.transaction_date)))
     .slice(0, 120);
   const opts = [`<option value="">不關聯原支出</option>`];
@@ -290,14 +290,91 @@ function budgetItemOptions(selected = "") {
   return optionList(rows, selected, "name", "id", "不綁定預算項目");
 }
 
-function getCurrentYearSummary() {
-  return state.data.yearSummary.find(y => y.year_id === state.selectedYearId)
-    || state.data.yearSummary.find(y => Number(y.budget_year) === Number(state.selectedBudgetYear))
-    || {};
+function enrichTransaction(row) {
+  const account = state.data.accounts.find(a => a.id === row.account_id) || {};
+  const toAccount = state.data.accounts.find(a => a.id === row.to_account_id) || {};
+  const category = state.data.categories.find(c => c.id === row.category_id) || {};
+  const budgetItem = state.data.budgetItems.find(b => b.id === row.budget_item_id) || {};
+  const date = row.transaction_date || "";
+  return {
+    ...row,
+    tx_year: date ? Number(String(date).slice(0, 4)) : null,
+    tx_month: date ? Number(String(date).slice(5, 7)) : null,
+    account_name: account.name || "",
+    account_type: account.type || "",
+    to_account_name: toAccount.name || "",
+    category_name: category.name || "未分類",
+    category_type: category.type || "",
+    budget_item_name: budgetItem.name || "",
+    tags: row.tags || ""
+  };
+}
+
+function allTransactionsEnriched() {
+  return (state.data.transactions || [])
+    .map(enrichTransaction)
+    .sort((a, b) => String(b.transaction_date || "").localeCompare(String(a.transaction_date || "")) || String(b.created_at || "").localeCompare(String(a.created_at || "")));
 }
 
 function transactionsForSelectedYear() {
-  return state.data.transactionView.filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear));
+  return allTransactionsEnriched().filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear));
+}
+
+function getCurrentYearSummary() {
+  const year = state.data.years.find(y => y.id === state.selectedYearId)
+    || state.data.years.find(y => Number(y.budget_year) === Number(state.selectedBudgetYear))
+    || {};
+  const txRows = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
+  const actual_income = txRows.reduce((sum, t) => sum + (t.type === "income" ? Number(t.amount || 0) : 0), 0);
+  const gross_expense = txRows.reduce((sum, t) => sum + (t.type === "expense" ? Number(t.amount || 0) : 0), 0);
+  const refund = txRows.reduce((sum, t) => sum + (t.type === "refund" ? Number(t.amount || 0) : 0), 0);
+  const actual_expense = gross_expense - refund;
+  const annual_budget = Number(year.annual_budget || 0);
+  const carryover_from_previous = Number(year.carryover_from_previous || 0);
+  const available_budget = annual_budget + carryover_from_previous;
+  const remaining_budget = available_budget - actual_expense;
+  return {
+    year_id: year.id,
+    budget_year: year.budget_year || state.selectedBudgetYear,
+    name: year.name || `${state.selectedBudgetYear} 年度預算`,
+    annual_budget,
+    carryover_from_previous,
+    available_budget,
+    actual_income,
+    actual_expense,
+    net_cashflow: actual_income - actual_expense,
+    remaining_budget,
+    budget_used_pct: available_budget ? Math.round(actual_expense / available_budget * 10000) / 100 : 0,
+    is_closed: year.is_closed,
+    note: year.note
+  };
+}
+
+function budgetItemSummariesForSelectedYear() {
+  const txRows = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
+  return (state.data.budgetItems || [])
+    .filter(i => i.year_id === state.selectedYearId)
+    .map(i => {
+      const category = state.data.categories.find(c => c.id === i.category_id) || {};
+      const actual_amount = txRows.reduce((sum, t) => {
+        if (t.budget_item_id !== i.id) return sum;
+        if (i.item_type === "expense" && t.type === "refund") return sum - Number(t.amount || 0);
+        if (t.type === i.item_type) return sum + Number(t.amount || 0);
+        return sum;
+      }, 0);
+      const planned_amount = Number(i.planned_amount || 0);
+      return {
+        ...i,
+        budget_item_id: i.id,
+        budget_year: state.selectedBudgetYear,
+        category_name: category.name || "",
+        category_type: category.type || "",
+        actual_amount,
+        remaining_amount: planned_amount - actual_amount,
+        used_pct: planned_amount ? Math.round(actual_amount / planned_amount * 10000) / 100 : 0
+      };
+    })
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name)));
 }
 
 function typeBadge(type) {
@@ -656,7 +733,7 @@ function renderBudget() {
   const editYear = state.editing.year;
   const editItem = state.editing.budgetItem;
   const current = getCurrentYearSummary();
-  const items = state.data.budgetSummary.filter(i => i.year_id === state.selectedYearId);
+  const items = budgetItemSummariesForSelectedYear();
   return `
     <div class="grid cols-3">
       ${metricCard("年度預算", fmtMoney(current.annual_budget), `結轉 ${fmtMoney(current.carryover_from_previous)}`)}
@@ -911,7 +988,7 @@ function renderRecurring() {
     <div class="card">
       <h3>${edit ? "編輯訂閱" : "新增訂閱"}</h3>
       <p class="metric-sub">這裡只管理固定扣款支出，例如串流、雲端、健身房、手機費。它不會自動新增流水帳。</p>
-      <p class="metric-sub">目前前端版本：v9。如果你看不到 v9，代表 GitHub Pages 或瀏覽器還在用舊版。</p>
+      <p class="metric-sub">目前前端版本：v12。如果你看不到 v12，代表 GitHub Pages 或瀏覽器還在用舊版。</p>
       <form id="recurringForm" class="form-grid">
         <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
         ${field("服務名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Netflix、Spotify、iCloud、ChatGPT">`)}
@@ -1356,11 +1433,6 @@ async function writeRow(table, payload, options = {}) {
     }
   }
 
-  if (!id) {
-    id = makeUuid();
-    clean.id = id;
-  }
-
   let response;
   if (action === "更新") {
     const updatePayload = { ...clean };
@@ -1368,28 +1440,33 @@ async function writeRow(table, payload, options = {}) {
     response = await state.client
       .from(table)
       .update(updatePayload)
-      .eq("id", id);
+      .eq("id", id)
+      .select("*")
+      .single();
   } else {
     response = await state.client
       .from(table)
-      .insert(clean);
+      .insert(clean)
+      .select("*")
+      .single();
   }
 
   if (response.error) {
     throw new Error(`${action}失敗：${formatSupabaseError(response.error)}｜表：${table}`);
   }
 
-  const verified = await verifyRowExists(table, id, action);
+  const saved = assertSavedRow(table, response.data, action);
 
   if (options.expect) {
     for (const [key, expected] of Object.entries(options.expect)) {
-      const actual = verified[key];
+      const actual = saved[key];
       if (String(actual ?? "") !== String(expected ?? "")) {
         throw new Error(`${action}驗證失敗：欄位 ${key} 沒有寫入成功。預期=${expected ?? "空"}，實際=${actual ?? "空"}。表：${table}`);
       }
     }
   }
 
+  const verified = await verifyRowExists(table, saved.id, action);
   return verified;
 }
 
@@ -1418,13 +1495,19 @@ async function removeRow(table, id) {
   if (before.error) throw new Error(`刪除前檢查失敗：${formatSupabaseError(before.error)}`);
   if (!before.data) throw new Error(`刪除失敗：資料不存在。表：${table}，id=${id}`);
 
-  const { error } = await state.client
+  const response = await state.client
     .from(table)
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .select("id")
+    .single();
 
-  if (error) {
-    throw new Error(`刪除失敗：${formatSupabaseError(error)}｜表：${table}`);
+  if (response.error) {
+    throw new Error(`刪除失敗：${formatSupabaseError(response.error)}｜表：${table}`);
+  }
+
+  if (!response.data?.id) {
+    throw new Error(`刪除失敗：資料庫沒有回傳被刪除資料。可能是權限或 RLS 問題。表：${table}`);
   }
 
   const verify = await state.client
@@ -1437,7 +1520,7 @@ async function removeRow(table, id) {
     throw new Error(`刪除驗證失敗：${formatSupabaseError(verify.error)}`);
   }
   if (verify.data) {
-    throw new Error(`刪除驗證失敗：資料仍存在。這通常是權限、RLS 或前端連錯專案。表：${table}，id=${id}`);
+    throw new Error(`刪除驗證失敗：資料仍存在。表：${table}，id=${id}`);
   }
 }
 
@@ -1445,25 +1528,63 @@ async function handleSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
   try {
-    if (form.id === "txForm") await saveTransaction(form);
-    if (form.id === "yearForm") await saveYear(form);
-    if (form.id === "budgetItemForm") await saveBudgetItem(form);
-    if (form.id === "accountForm") await saveAccount(form);
-    if (form.id === "categoryForm") await saveCategory(form);
-    if (form.id === "tagForm") await saveTag(form);
-    if (form.id === "recurringForm") {
-      throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v11。");
+    let saved = null;
+    switch (form.id) {
+      case "txForm":
+        saved = await saveTransaction(form);
+        break;
+      case "yearForm":
+        saved = await saveYear(form);
+        break;
+      case "budgetItemForm":
+        saved = await saveBudgetItem(form);
+        break;
+      case "accountForm":
+        saved = await saveAccount(form);
+        break;
+      case "categoryForm":
+        saved = await saveCategory(form);
+        break;
+      case "tagForm":
+        saved = await saveTag(form);
+        break;
+      case "recurringForm":
+        throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v12。");
+      case "creditCardForm":
+        saved = await saveCreditCard(form);
+        break;
+      case "loanForm":
+        saved = await saveLoan(form);
+        break;
+      case "goalForm":
+        saved = await saveGoal(form);
+        break;
+      default:
+        throw new Error(`未知表單：${form.id || "無 id"}`);
     }
-    if (form.id === "creditCardForm") await saveCreditCard(form);
-    if (form.id === "loanForm") await saveLoan(form);
-    if (form.id === "goalForm") await saveGoal(form);
+
     await loadAll();
     clearEditing();
     render();
-    showAlert("v11 驗證通過：已寫入資料庫。", "good");
+    showAlert(`v12 驗證通過：${tableLabel(formToTable(form.id))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
+}
+
+function formToTable(formId) {
+  return {
+    txForm: "transactions",
+    yearForm: "years",
+    budgetItemForm: "budget_items",
+    accountForm: "accounts",
+    categoryForm: "categories",
+    tagForm: "tags",
+    recurringForm: "recurring_transactions",
+    creditCardForm: "credit_cards",
+    loanForm: "loans",
+    goalForm: "goals"
+  }[formId] || formId;
 }
 
 async function handleRecurringSubmit(event) {
@@ -1475,12 +1596,12 @@ async function handleRecurringSubmit(event) {
     const found = rows.some(row => String(row.id) === String(saved.id));
 
     if (!found) {
-      throw new Error(`v11 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
+      throw new Error(`v12 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
     }
 
     state.editing.recurring = null;
     render();
-    showAlert(`v11 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v12 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -1510,7 +1631,7 @@ async function saveTransaction(form) {
     cashflow_nature: d.cashflow_nature || "variable",
     control_level: d.control_level || "controllable"
   };
-  await upsert("transactions", payload, { expect: { type: payload.type, amount: payload.amount } });
+  return await upsert("transactions", payload, { expect: { type: payload.type, amount: payload.amount } });
 }
 
 async function saveYear(form) {
@@ -1526,6 +1647,7 @@ async function saveYear(form) {
   const row = await upsert("years", payload, { expect: { budget_year: Number(d.budget_year) } });
   state.selectedYearId = row.id;
   state.selectedBudgetYear = row.budget_year;
+  return row;
 }
 
 async function saveBudgetItem(form) {
@@ -1543,7 +1665,7 @@ async function saveBudgetItem(form) {
     is_active: boolValue(d.is_active),
     note: d.note
   };
-  await upsert("budget_items", payload, { expect: { name: payload.name, planned_amount: payload.planned_amount } });
+  return await upsert("budget_items", payload, { expect: { name: payload.name, planned_amount: payload.planned_amount } });
 }
 
 async function saveAccount(form) {
@@ -1558,7 +1680,7 @@ async function saveAccount(form) {
     sort_order: Number(d.sort_order || 0),
     is_active: boolValue(d.is_active)
   };
-  await upsert("accounts", payload, { expect: { name: payload.name, type: payload.type } });
+  return await upsert("accounts", payload, { expect: { name: payload.name, type: payload.type } });
 }
 
 async function saveCategory(form) {
@@ -1570,7 +1692,7 @@ async function saveCategory(form) {
     color: d.color,
     sort_order: Number(d.sort_order || 0)
   };
-  await upsert("categories", payload, { expect: { name: payload.name, type: payload.type } });
+  return await upsert("categories", payload, { expect: { name: payload.name, type: payload.type } });
 }
 
 async function saveTag(form) {
@@ -1581,7 +1703,7 @@ async function saveTag(form) {
     color: d.color,
     note: d.note
   };
-  await upsert("tags", payload, { expect: { name: payload.name } });
+  return await upsert("tags", payload, { expect: { name: payload.name } });
 }
 
 async function saveRecurring(form) {
@@ -1629,7 +1751,7 @@ async function saveCreditCard(form) {
     payment_due_day: d.payment_due_day ? Number(d.payment_due_day) : null,
     credit_limit: numberOrZero(d.credit_limit)
   };
-  await upsert("credit_cards", payload, { expect: { account_id: payload.account_id, card_name: payload.card_name } });
+  return await upsert("credit_cards", payload, { expect: { account_id: payload.account_id, card_name: payload.card_name } });
 }
 
 async function saveLoan(form) {
@@ -1645,7 +1767,7 @@ async function saveLoan(form) {
     monthly_payment: numberOrZero(d.monthly_payment),
     status: d.status || "active"
   };
-  await upsert("loans", payload, { expect: { name: payload.name } });
+  return await upsert("loans", payload, { expect: { name: payload.name } });
 }
 
 async function saveGoal(form) {
@@ -1662,7 +1784,7 @@ async function saveGoal(form) {
     status: d.status || "active",
     note: d.note
   };
-  await upsert("goals", payload, { expect: { name: payload.name } });
+  return await upsert("goals", payload, { expect: { name: payload.name } });
 }
 
 function clearEditing() {
