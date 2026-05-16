@@ -532,12 +532,8 @@ function renderTransactions() {
           ${selectOpts(["cleared","pending","cancelled"], edit?.status || "cleared")}
         </select>`)}
         <div class="field wide">
-          <label>備註 / 收據連結 / 附件連結</label>
-          <div class="form-grid three">
-            <textarea class="input" name="note" placeholder="備註">${escapeHtml(edit?.note || "")}</textarea>
-            <input class="input" name="receipt_url" value="${escapeHtml(edit?.receipt_url || "")}" placeholder="收據連結">
-            <input class="input" name="attachment_url" value="${escapeHtml(edit?.attachment_url || "")}" placeholder="附件連結">
-          </div>
+          <label>備註</label>
+          <textarea class="input" name="note" placeholder="備註，例如：退票、聚餐、帳單說明">${escapeHtml(edit?.note || "")}</textarea>
         </div>
         <div class="wide btn-row">
           <button class="btn" type="submit">${edit ? "儲存修改" : "新增交易"}</button>
@@ -1305,9 +1301,7 @@ async function saveTransaction(form) {
     status: d.status || "cleared",
     necessity_level: d.necessity_level || "other",
     cashflow_nature: d.cashflow_nature || "variable",
-    control_level: d.control_level || "controllable",
-    receipt_url: d.receipt_url,
-    attachment_url: d.attachment_url
+    control_level: d.control_level || "controllable"
   };
   await upsert("transactions", payload);
 }
