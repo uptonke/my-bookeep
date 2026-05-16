@@ -219,7 +219,7 @@ function today() {
 
 function showAlert(message, type = "warn") {
   const box = $("#alertBox");
-  box.className = `alert ${type === "bad" ? "bad" : ""}`;
+  box.className = `alert ${type === "bad" ? "bad" : type === "good" ? "good" : ""}`;
   box.innerHTML = message;
   if (!message) box.classList.add("hidden");
 }
@@ -271,6 +271,13 @@ function accountOptions(selected = "") {
     .filter(a => a.is_active !== false)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name));
   return optionList(rows, selected, "name", "id", "請選擇帳戶");
+}
+
+function creditCardAccountOptions(selected = "") {
+  const rows = state.data.accounts
+    .filter(a => a.is_active !== false && a.type === "credit_card")
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name));
+  return optionList(rows, selected, "name", "id", "請先在帳戶新增信用卡帳戶");
 }
 
 function budgetItemOptions(selected = "") {
@@ -952,14 +959,12 @@ function renderCreditLoans() {
         <h3>${editCard ? "編輯信用卡" : "新增信用卡"}</h3>
         <form id="creditCardForm" class="form-grid two">
           <input type="hidden" name="id" value="${escapeHtml(editCard?.id || "")}">
-          ${field("對應帳戶", `<select class="input" name="account_id" required>${accountOptions(editCard?.account_id || "")}</select>`)}
+          ${field("對應帳戶", `<select class="input" name="account_id" required>${creditCardAccountOptions(editCard?.account_id || "")}</select>`)}
           ${field("卡名", `<input class="input" name="card_name" value="${escapeHtml(editCard?.card_name || "")}" required>`)}
           ${field("發卡行", `<input class="input" name="issuer" value="${escapeHtml(editCard?.issuer || "")}">`)}
           ${field("信用額度", `<input class="input" type="number" step="1" name="credit_limit" value="${escapeHtml(editCard?.credit_limit || 0)}">`)}
           ${field("結帳日", `<input class="input" type="number" min="1" max="31" name="statement_day" value="${escapeHtml(editCard?.statement_day || "")}">`)}
           ${field("繳款日", `<input class="input" type="number" min="1" max="31" name="payment_due_day" value="${escapeHtml(editCard?.payment_due_day || "")}">`)}
-          ${field("回饋類型", `<select class="input" name="reward_type">${selectOpts(["cashback","points","miles","none","other"], editCard?.reward_type || "none")}</select>`)}
-          ${field("回饋率", `<input class="input" type="number" step="0.0001" name="reward_rate" value="${escapeHtml(editCard?.reward_rate || 0)}">`)}
           <div class="wide btn-row">
             <button class="btn" type="submit">${editCard ? "儲存信用卡" : "新增信用卡"}</button>
             ${editCard ? `<button class="btn secondary" type="button" data-cancel-edit="creditCard">取消編輯</button>` : ""}
@@ -1007,7 +1012,6 @@ function renderCreditCardTable() {
           <td>${escapeHtml(accountMap[c.account_id] || "")}</td>
           <td class="mono">${fmtMoney(c.credit_limit)}</td>
           <td>${escapeHtml(c.statement_day || "-")} / ${escapeHtml(c.payment_due_day || "-")}</td>
-          <td>${escapeHtml(labelOf(c.reward_type || "none"))} ${c.reward_rate ? `${fmtNumber(c.reward_rate, 2)}%` : ""}</td>
           <td class="actions">
             <button class="btn small secondary" data-edit-card="${c.id}">編輯</button>
             <button class="btn small danger" data-delete="credit_cards:${c.id}">刪除</button>
@@ -1245,7 +1249,10 @@ function boolValue(value) {
 async function upsert(table, payload) {
   const clean = { ...payload };
   Object.keys(clean).forEach(k => clean[k] === undefined && delete clean[k]);
-  const { data, error } = await state.client.from(table).upsert(clean).select().single();
+  const query = clean.id
+    ? state.client.from(table).upsert(clean).select().single()
+    : state.client.from(table).insert(clean).select().single();
+  const { data, error } = await query;
   if (error) throw new Error(error.message);
   return data;
 }
@@ -1278,6 +1285,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
+    showAlert("已儲存。", "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -1410,9 +1418,7 @@ async function saveCreditCard(form) {
     card_name: d.card_name,
     statement_day: d.statement_day ? Number(d.statement_day) : null,
     payment_due_day: d.payment_due_day ? Number(d.payment_due_day) : null,
-    credit_limit: numberOrZero(d.credit_limit),
-    reward_type: d.reward_type || "none",
-    reward_rate: numberOrZero(d.reward_rate)
+    credit_limit: numberOrZero(d.credit_limit)
   };
   await upsert("credit_cards", payload);
 }
