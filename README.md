@@ -1,12 +1,5 @@
-# 個人記帳系統 v9
+# 個人記帳系統 v11
 
-本版修正訂閱管理寫入驗證：
+更新：年度預算、流水帳與其他通用表單改成「指定 id 寫入 + 寫入後查回驗證」。
 
-- 訂閱表單改成獨立送出流程，不再走通用儲存流程。
-- 所有新增 / 更新都會檢查資料庫是否回傳資料與 id。
-- 訂閱新增後會立刻用 id 查回資料庫驗證。
-- 若資料庫沒有真正接受寫入，畫面會顯示紅色錯誤，不會再假裝「已儲存」。
-
-更新方式：覆蓋 `index.html`、`style.css`、`script.js`、`config.js`、`README.md`，不用執行 SQL migration。
-
-更新後請用網址後方加 `?v=9` 開啟，並確認左側顯示 `雲端資料庫｜v9`。
+更新方式：覆蓋 `index.html`、`style.css`、`script.js`、`config.js`、`README.md`，並執行 `migration_v11_fix_all_permissions.sql`。

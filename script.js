@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v9";
+const APP_VERSION = "v11";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -61,7 +61,7 @@ const pageMeta = {
   budget: ["年度預算", "年度預算項目、結轉與預算使用率"],
   accounts: ["帳戶", "現金、銀行、電子支付、信用卡與其他帳戶"],
   categories: ["分類 / 標籤", "收支分類與交易標籤管理"],
-  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v9"],
+  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v10"],
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
@@ -1292,33 +1292,153 @@ function assertSavedRow(table, data, action = "寫入") {
   return data;
 }
 
-async function upsert(table, payload) {
+function cleanPayload(payload) {
   const clean = { ...payload };
-  Object.keys(clean).forEach(k => clean[k] === undefined && delete clean[k]);
+  Object.keys(clean).forEach(k => {
+    if (clean[k] === undefined) delete clean[k];
+  });
+  return clean;
+}
 
-  const query = clean.id
-    ? state.client.from(table).upsert(clean).select("*").single()
-    : state.client.from(table).insert(clean).select("*").single();
+async function verifyRowExists(table, id, action = "寫入") {
+  const { data, error } = await state.client
+    .from(table)
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
 
-  const { data, error } = await query;
-  if (error) throw new Error(formatSupabaseError(error));
-  return assertSavedRow(table, data, clean.id ? "更新" : "新增");
+  if (error) throw new Error(`${action}驗證失敗：${formatSupabaseError(error)}`);
+  if (!data || !data.id) {
+    throw new Error(`${action}驗證失敗：資料庫查不到 id=${id}。表：${table}`);
+  }
+  return data;
+}
+
+function makeUuid() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    const v = c === "x" ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+function normalizeForWrite(payload) {
+  const clean = cleanPayload(payload);
+  Object.keys(clean).forEach(k => {
+    if (clean[k] === "") clean[k] = null;
+  });
+  return clean;
+}
+
+async function findExistingYearId(budgetYear) {
+  if (!budgetYear) return null;
+  const { data, error } = await state.client
+    .from("years")
+    .select("id,budget_year")
+    .eq("budget_year", Number(budgetYear))
+    .maybeSingle();
+
+  if (error) throw new Error(`查詢既有年度失敗：${formatSupabaseError(error)}`);
+  return data?.id || null;
+}
+
+async function writeRow(table, payload, options = {}) {
+  const clean = normalizeForWrite(payload);
+  let id = clean.id || null;
+  let action = id ? "更新" : "新增";
+
+  if (!id && table === "years" && clean.budget_year) {
+    id = await findExistingYearId(clean.budget_year);
+    if (id) {
+      clean.id = id;
+      action = "更新";
+    }
+  }
+
+  if (!id) {
+    id = makeUuid();
+    clean.id = id;
+  }
+
+  let response;
+  if (action === "更新") {
+    const updatePayload = { ...clean };
+    delete updatePayload.id;
+    response = await state.client
+      .from(table)
+      .update(updatePayload)
+      .eq("id", id);
+  } else {
+    response = await state.client
+      .from(table)
+      .insert(clean);
+  }
+
+  if (response.error) {
+    throw new Error(`${action}失敗：${formatSupabaseError(response.error)}｜表：${table}`);
+  }
+
+  const verified = await verifyRowExists(table, id, action);
+
+  if (options.expect) {
+    for (const [key, expected] of Object.entries(options.expect)) {
+      const actual = verified[key];
+      if (String(actual ?? "") !== String(expected ?? "")) {
+        throw new Error(`${action}驗證失敗：欄位 ${key} 沒有寫入成功。預期=${expected ?? "空"}，實際=${actual ?? "空"}。表：${table}`);
+      }
+    }
+  }
+
+  return verified;
+}
+
+async function upsert(table, payload, options = {}) {
+  return await writeRow(table, payload, options);
 }
 
 async function insert(table, payload) {
-  const clean = Array.isArray(payload) ? payload : [payload];
-  const { data, error } = await state.client.from(table).insert(clean).select("*");
-  if (error) throw new Error(formatSupabaseError(error));
-  if (!Array.isArray(data) || data.length === 0) {
-    throw new Error(`新增失敗：資料庫沒有回傳新增資料。表：${table}`);
+  if (Array.isArray(payload)) {
+    const rows = [];
+    for (const row of payload) rows.push(await writeRow(table, row));
+    return rows;
   }
-  data.forEach(row => assertSavedRow(table, row, "新增"));
-  return Array.isArray(payload) ? data : data[0];
+  return await writeRow(table, payload);
 }
 
 async function removeRow(table, id) {
-  const { error } = await state.client.from(table).delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  if (!id) throw new Error("刪除失敗：缺少資料 id");
+
+  const before = await state.client
+    .from(table)
+    .select("id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (before.error) throw new Error(`刪除前檢查失敗：${formatSupabaseError(before.error)}`);
+  if (!before.data) throw new Error(`刪除失敗：資料不存在。表：${table}，id=${id}`);
+
+  const { error } = await state.client
+    .from(table)
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(`刪除失敗：${formatSupabaseError(error)}｜表：${table}`);
+  }
+
+  const verify = await state.client
+    .from(table)
+    .select("id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (verify.error) {
+    throw new Error(`刪除驗證失敗：${formatSupabaseError(verify.error)}`);
+  }
+  if (verify.data) {
+    throw new Error(`刪除驗證失敗：資料仍存在。這通常是權限、RLS 或前端連錯專案。表：${table}，id=${id}`);
+  }
 }
 
 async function handleSubmit(event) {
@@ -1332,7 +1452,7 @@ async function handleSubmit(event) {
     if (form.id === "categoryForm") await saveCategory(form);
     if (form.id === "tagForm") await saveTag(form);
     if (form.id === "recurringForm") {
-      throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v9。");
+      throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v11。");
     }
     if (form.id === "creditCardForm") await saveCreditCard(form);
     if (form.id === "loanForm") await saveLoan(form);
@@ -1340,7 +1460,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert("v9 驗證通過：已寫入資料庫。", "good");
+    showAlert("v11 驗證通過：已寫入資料庫。", "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -1355,12 +1475,12 @@ async function handleRecurringSubmit(event) {
     const found = rows.some(row => String(row.id) === String(saved.id));
 
     if (!found) {
-      throw new Error(`v9 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
+      throw new Error(`v11 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
     }
 
     state.editing.recurring = null;
     render();
-    showAlert(`v9 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v11 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -1368,6 +1488,10 @@ async function handleRecurringSubmit(event) {
 
 async function saveTransaction(form) {
   const d = readForm(form);
+  if (!d.account_id) throw new Error("請選擇帳戶");
+  if (!Number(d.amount)) throw new Error("請輸入金額");
+  if (d.type === "transfer" && !d.to_account_id) throw new Error("轉帳需要選擇轉入帳戶");
+  if (d.type !== "transfer" && d.to_account_id) d.to_account_id = null;
   const payload = {
     id: d.id || undefined,
     transaction_date: d.transaction_date,
@@ -1386,7 +1510,7 @@ async function saveTransaction(form) {
     cashflow_nature: d.cashflow_nature || "variable",
     control_level: d.control_level || "controllable"
   };
-  await upsert("transactions", payload);
+  await upsert("transactions", payload, { expect: { type: payload.type, amount: payload.amount } });
 }
 
 async function saveYear(form) {
@@ -1399,7 +1523,7 @@ async function saveYear(form) {
     carryover_from_previous: numberOrZero(d.carryover_from_previous),
     note: d.note
   };
-  const row = await upsert("years", payload);
+  const row = await upsert("years", payload, { expect: { budget_year: Number(d.budget_year) } });
   state.selectedYearId = row.id;
   state.selectedBudgetYear = row.budget_year;
 }
@@ -1419,7 +1543,7 @@ async function saveBudgetItem(form) {
     is_active: boolValue(d.is_active),
     note: d.note
   };
-  await upsert("budget_items", payload);
+  await upsert("budget_items", payload, { expect: { name: payload.name, planned_amount: payload.planned_amount } });
 }
 
 async function saveAccount(form) {
@@ -1434,7 +1558,7 @@ async function saveAccount(form) {
     sort_order: Number(d.sort_order || 0),
     is_active: boolValue(d.is_active)
   };
-  await upsert("accounts", payload);
+  await upsert("accounts", payload, { expect: { name: payload.name, type: payload.type } });
 }
 
 async function saveCategory(form) {
@@ -1446,7 +1570,7 @@ async function saveCategory(form) {
     color: d.color,
     sort_order: Number(d.sort_order || 0)
   };
-  await upsert("categories", payload);
+  await upsert("categories", payload, { expect: { name: payload.name, type: payload.type } });
 }
 
 async function saveTag(form) {
@@ -1457,7 +1581,7 @@ async function saveTag(form) {
     color: d.color,
     note: d.note
   };
-  await upsert("tags", payload);
+  await upsert("tags", payload, { expect: { name: payload.name } });
 }
 
 async function saveRecurring(form) {
@@ -1487,42 +1611,11 @@ async function saveRecurring(form) {
     is_active: boolValue(d.is_active)
   };
 
-  let response;
-  if (d.id) {
-    response = await state.client
-      .from("recurring_transactions")
-      .update(payload)
-      .eq("id", d.id)
-      .select("*")
-      .single();
-  } else {
-    response = await state.client
-      .from("recurring_transactions")
-      .insert(payload)
-      .select("*")
-      .single();
-  }
+  const saved = await writeRow("recurring_transactions", { id: d.id || undefined, ...payload }, {
+    expect: { name: payload.name, type: "expense", amount: payload.amount }
+  });
 
-  if (response.error) {
-    throw new Error(`訂閱寫入失敗：${formatSupabaseError(response.error)}`);
-  }
-
-  const saved = assertSavedRow("recurring_transactions", response.data, d.id ? "訂閱更新" : "訂閱新增");
-
-  const verify = await state.client
-    .from("recurring_transactions")
-    .select("*")
-    .eq("id", saved.id)
-    .maybeSingle();
-
-  if (verify.error) {
-    throw new Error(`訂閱驗證讀取失敗：${formatSupabaseError(verify.error)}`);
-  }
-  if (!verify.data || !verify.data.id) {
-    throw new Error(`訂閱寫入後驗證失敗：找不到 id=${saved.id} 的資料。`);
-  }
-
-  return verify.data;
+  return saved;
 }
 
 async function saveCreditCard(form) {
@@ -1536,7 +1629,7 @@ async function saveCreditCard(form) {
     payment_due_day: d.payment_due_day ? Number(d.payment_due_day) : null,
     credit_limit: numberOrZero(d.credit_limit)
   };
-  await upsert("credit_cards", payload);
+  await upsert("credit_cards", payload, { expect: { account_id: payload.account_id, card_name: payload.card_name } });
 }
 
 async function saveLoan(form) {
@@ -1552,7 +1645,7 @@ async function saveLoan(form) {
     monthly_payment: numberOrZero(d.monthly_payment),
     status: d.status || "active"
   };
-  await upsert("loans", payload);
+  await upsert("loans", payload, { expect: { name: payload.name } });
 }
 
 async function saveGoal(form) {
@@ -1569,7 +1662,7 @@ async function saveGoal(form) {
     status: d.status || "active",
     note: d.note
   };
-  await upsert("goals", payload);
+  await upsert("goals", payload, { expect: { name: payload.name } });
 }
 
 function clearEditing() {
