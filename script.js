@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v13";
+const APP_VERSION = "v14";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -61,7 +61,7 @@ const pageMeta = {
   budget: ["年度預算", "年度預算項目、結轉與預算使用率"],
   accounts: ["帳戶", "現金、銀行、電子支付、信用卡與其他帳戶"],
   categories: ["分類 / 標籤", "收支分類與交易標籤管理"],
-  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v13"],
+  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v14"],
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
@@ -719,7 +719,7 @@ function renderTxTable(rows) {
               <td><span class="badge">${escapeHtml(labelOf(t.status))}</span></td>
               <td class="actions">
                 <button class="btn small secondary" data-edit-tx="${t.id}">編輯</button>
-                <button class="btn small danger" data-delete="transactions:${t.id}">刪除</button>
+                <button type="button" class="btn small danger" data-delete="transactions:${t.id}">刪除</button>
               </td>
             </tr>
           `).join("")}
@@ -758,7 +758,7 @@ function renderBudget() {
           <button class="btn secondary" type="button" data-edit-year="${state.selectedYearId}">載入目前年度編輯</button>
           <button class="btn secondary" type="button" id="closeYearBtn">結轉到下一年</button>
           ${editYear ? `<button class="btn secondary" type="button" data-cancel-edit="year">取消編輯</button>` : ""}
-          <button class="btn danger" type="button" data-delete="years:${state.selectedYearId}">刪除目前年度</button>
+          <button type="button" class="btn danger" data-delete="years:${state.selectedYearId}">刪除目前年度</button>
         </div>
       </form>
     </div>
@@ -819,7 +819,7 @@ function renderBudgetItemTable(rows) {
                 </td>
                 <td class="actions">
                   <button class="btn small secondary" data-edit-budget="${i.budget_item_id}">編輯</button>
-                  <button class="btn small danger" data-delete="budget_items:${i.budget_item_id}">刪除</button>
+                  <button type="button" class="btn small danger" data-delete="budget_items:${i.budget_item_id}">刪除</button>
                 </td>
               </tr>
             `;
@@ -879,7 +879,7 @@ function renderAccountTable(rows) {
               <td>${a.is_active ? "啟用" : "停用"}</td>
               <td class="actions">
                 <button class="btn small secondary" data-edit-account="${a.id}">編輯</button>
-                <button class="btn small danger" data-delete="accounts:${a.id}">刪除</button>
+                <button type="button" class="btn small danger" data-delete="accounts:${a.id}">刪除</button>
               </td>
             </tr>
           `).join("")}
@@ -952,7 +952,7 @@ function renderCategoryTable() {
             <td>${escapeHtml(c.sort_order || 0)}</td>
             <td class="actions">
               <button class="btn small secondary" data-edit-category="${c.id}">編輯</button>
-              <button class="btn small danger" data-delete="categories:${c.id}">刪除</button>
+              <button type="button" class="btn small danger" data-delete="categories:${c.id}">刪除</button>
             </td>
           </tr>`).join("")}</tbody>
       </table>
@@ -974,7 +974,7 @@ function renderTagTable() {
             <td>${escapeHtml(t.note || "")}</td>
             <td class="actions">
               <button class="btn small secondary" data-edit-tag="${t.id}">編輯</button>
-              <button class="btn small danger" data-delete="tags:${t.id}">刪除</button>
+              <button type="button" class="btn small danger" data-delete="tags:${t.id}">刪除</button>
             </td>
           </tr>`).join("")}</tbody>
       </table>
@@ -1045,7 +1045,7 @@ function renderRecurringTable() {
             <td>${r.is_active ? "使用中" : "已取消"}</td>
             <td class="actions">
               <button class="btn small secondary" data-edit-recurring="${r.id}">編輯</button>
-              <button class="btn small danger" data-delete="recurring_transactions:${r.id}">刪除</button>
+              <button type="button" class="btn small danger" data-delete="recurring_transactions:${r.id}">刪除</button>
             </td>
           </tr>`).join("")}</tbody>
       </table>
@@ -1117,7 +1117,7 @@ function renderCreditCardTable() {
           <td>${escapeHtml(c.statement_day || "-")} / ${escapeHtml(c.payment_due_day || "-")}</td>
           <td class="actions">
             <button class="btn small secondary" data-edit-card="${c.id}">編輯</button>
-            <button class="btn small danger" data-delete="credit_cards:${c.id}">刪除</button>
+            <button type="button" class="btn small danger" data-delete="credit_cards:${c.id}">刪除</button>
           </td>
         </tr>`).join("")}</tbody>
     </table></div>
@@ -1140,7 +1140,7 @@ function renderLoanTable() {
           <td>${escapeHtml(labelOf(l.status))}</td>
           <td class="actions">
             <button class="btn small secondary" data-edit-loan="${l.id}">編輯</button>
-            <button class="btn small danger" data-delete="loans:${l.id}">刪除</button>
+            <button type="button" class="btn small danger" data-delete="loans:${l.id}">刪除</button>
           </td>
         </tr>`).join("")}</tbody>
     </table></div>
@@ -1194,7 +1194,7 @@ function renderGoalCards() {
             <p class="metric-sub">${fmtMoney(g.current_amount)} / ${fmtMoney(g.target_amount)} · ${escapeHtml(labelOf(g.goal_type))}</p>
             <div class="btn-row">
               <button class="btn small secondary" data-edit-goal="${g.id}">編輯</button>
-              <button class="btn small danger" data-delete="goals:${g.id}">刪除</button>
+              <button type="button" class="btn small danger" data-delete="goals:${g.id}">刪除</button>
             </div>
           </div>
         `;
@@ -1492,14 +1492,13 @@ async function removeRow(table, id) {
     .eq("id", id)
     .maybeSingle();
 
-  if (before.error) throw new Error(`刪除前檢查失敗：${formatSupabaseError(before.error)}`);
+  if (before.error) throw new Error(`刪除前檢查失敗：${formatSupabaseError(before.error)}｜表：${table}`);
   if (!before.data) throw new Error(`刪除失敗：資料不存在。表：${table}，id=${id}`);
 
   const response = await state.client
     .from(table)
     .delete()
-    .eq("id", id)
-    .select("id");
+    .eq("id", id);
 
   if (response.error) {
     throw new Error(`刪除失敗：${formatSupabaseError(response.error)}｜表：${table}`);
@@ -1512,11 +1511,13 @@ async function removeRow(table, id) {
     .maybeSingle();
 
   if (verify.error) {
-    throw new Error(`刪除驗證失敗：${formatSupabaseError(verify.error)}`);
+    throw new Error(`刪除驗證失敗：${formatSupabaseError(verify.error)}｜表：${table}`);
   }
   if (verify.data) {
     throw new Error(`刪除驗證失敗：資料仍存在。表：${table}，id=${id}`);
   }
+
+  return true;
 }
 
 async function handleSubmit(event) {
@@ -1545,7 +1546,7 @@ async function handleSubmit(event) {
         saved = await saveTag(form);
         break;
       case "recurringForm":
-        throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v13。");
+        throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v14。");
       case "creditCardForm":
         saved = await saveCreditCard(form);
         break;
@@ -1562,7 +1563,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v13 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v14 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -1592,12 +1593,12 @@ async function handleRecurringSubmit(event) {
     const found = rows.some(row => String(row.id) === String(saved.id));
 
     if (!found) {
-      throw new Error(`v13 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
+      throw new Error(`v14 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
     }
 
     state.editing.recurring = null;
     render();
-    showAlert(`v13 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v14 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -1876,18 +1877,29 @@ function bindRenderedEvents() {
     render();
   }));
 
-  $$("[data-delete]").forEach(btn => btn.addEventListener("click", async () => {
-    const [table, id] = btn.dataset.delete.split(":");
-    const ok = await confirmAction("確認刪除", `確定要刪除「${tableLabel(table)}」這筆資料？刪除後無法從畫面復原。`);
+  $$('[data-delete]').forEach(btn => btn.addEventListener('click', async event => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const raw = btn.getAttribute('data-delete') || '';
+    const [table, id] = raw.split(':');
+
+    if (!table || !id) {
+      showAlert(`刪除失敗：刪除按鈕資料不完整。data-delete=${escapeHtml(raw)}`, 'bad');
+      return;
+    }
+
+    const ok = await confirmAction('確認刪除', `確定要刪除「${tableLabel(table)}」這筆資料？刪除後無法從畫面復原。`);
     if (!ok) return;
+
     try {
       await removeRow(table, id);
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v13 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, "good");
+      showAlert(`v14 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
-      showAlert(`刪除失敗：${escapeHtml(error.message)}`, "bad");
+      showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
   }));
 
@@ -1912,11 +1924,50 @@ function bindRenderedEvents() {
 }
 
 function confirmAction(title, message) {
-  const dialog = $("#confirmDialog");
-  $("#confirmTitle").textContent = title;
-  $("#confirmMessage").textContent = message;
+  const dialog = $('#confirmDialog');
+  const titleEl = $('#confirmTitle');
+  const messageEl = $('#confirmMessage');
+  const cancelBtn = $('#confirmCancelBtn');
+  const okBtn = $('#confirmOkBtn');
+
+  if (!dialog || !titleEl || !messageEl || !cancelBtn || !okBtn || typeof dialog.showModal !== 'function') {
+    return Promise.resolve(window.confirm(`${title}
+
+${message}`));
+  }
+
+  titleEl.textContent = title;
+  messageEl.textContent = message;
+
   return new Promise(resolve => {
-    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
+    let settled = false;
+    const cleanup = () => {
+      cancelBtn.removeEventListener('click', onCancel);
+      okBtn.removeEventListener('click', onOk);
+      dialog.removeEventListener('cancel', onCancel);
+      dialog.removeEventListener('close', onClose);
+    };
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (dialog.open) dialog.close(value ? 'confirm' : 'cancel');
+      resolve(value);
+    };
+    const onCancel = event => {
+      event.preventDefault();
+      finish(false);
+    };
+    const onOk = event => {
+      event.preventDefault();
+      finish(true);
+    };
+    const onClose = () => finish(dialog.returnValue === 'confirm');
+
+    cancelBtn.addEventListener('click', onCancel);
+    okBtn.addEventListener('click', onOk);
+    dialog.addEventListener('cancel', onCancel);
+    dialog.addEventListener('close', onClose);
     dialog.showModal();
   });
 }
