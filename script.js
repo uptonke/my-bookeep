@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v12";
+const APP_VERSION = "v13";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -61,7 +61,7 @@ const pageMeta = {
   budget: ["年度預算", "年度預算項目、結轉與預算使用率"],
   accounts: ["帳戶", "現金、銀行、電子支付、信用卡與其他帳戶"],
   categories: ["分類 / 標籤", "收支分類與交易標籤管理"],
-  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v12"],
+  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v13"],
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
@@ -1499,15 +1499,10 @@ async function removeRow(table, id) {
     .from(table)
     .delete()
     .eq("id", id)
-    .select("id")
-    .single();
+    .select("id");
 
   if (response.error) {
     throw new Error(`刪除失敗：${formatSupabaseError(response.error)}｜表：${table}`);
-  }
-
-  if (!response.data?.id) {
-    throw new Error(`刪除失敗：資料庫沒有回傳被刪除資料。可能是權限或 RLS 問題。表：${table}`);
   }
 
   const verify = await state.client
@@ -1527,9 +1522,10 @@ async function removeRow(table, id) {
 async function handleSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const formId = form.getAttribute("id") || "";
   try {
     let saved = null;
-    switch (form.id) {
+    switch (formId) {
       case "txForm":
         saved = await saveTransaction(form);
         break;
@@ -1549,7 +1545,7 @@ async function handleSubmit(event) {
         saved = await saveTag(form);
         break;
       case "recurringForm":
-        throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v12。");
+        throw new Error("訂閱表單不應進入通用儲存流程。請確認目前前端版本為 v13。");
       case "creditCardForm":
         saved = await saveCreditCard(form);
         break;
@@ -1560,13 +1556,13 @@ async function handleSubmit(event) {
         saved = await saveGoal(form);
         break;
       default:
-        throw new Error(`未知表單：${form.id || "無 id"}`);
+        throw new Error(`未知表單：${formId || "無 id"}`);
     }
 
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v12 驗證通過：${tableLabel(formToTable(form.id))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v13 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -1596,12 +1592,12 @@ async function handleRecurringSubmit(event) {
     const found = rows.some(row => String(row.id) === String(saved.id));
 
     if (!found) {
-      throw new Error(`v12 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
+      throw new Error(`v13 驗證失敗：寫入後重新讀取列表，找不到 id=${saved.id || "無"}。目前列表 ${rows.length} 筆。`);
     }
 
     state.editing.recurring = null;
     render();
-    showAlert(`v12 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v13 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -1793,7 +1789,7 @@ function clearEditing() {
 
 function bindRenderedEvents() {
   $("#recurringForm")?.addEventListener("submit", handleRecurringSubmit);
-  $$("form").filter(form => form.id !== "recurringForm").forEach(form => form.addEventListener("submit", handleSubmit));
+  $$("form").filter(form => form.getAttribute("id") !== "recurringForm").forEach(form => form.addEventListener("submit", handleSubmit));
 
   $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
 
@@ -1889,6 +1885,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
+      showAlert(`v13 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, "good");
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, "bad");
     }
@@ -1918,9 +1915,9 @@ function confirmAction(title, message) {
   const dialog = $("#confirmDialog");
   $("#confirmTitle").textContent = title;
   $("#confirmMessage").textContent = message;
-  dialog.showModal();
   return new Promise(resolve => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
+    dialog.showModal();
   });
 }
 

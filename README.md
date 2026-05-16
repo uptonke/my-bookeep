@@ -1,5 +1,15 @@
-# 個人記帳系統 v12
+# 個人記帳系統 v13
 
-更新：年度預算、流水帳與其他通用表單改成「指定 id 寫入 + 寫入後查回驗證」。
+## 更新方式
 
-更新方式：覆蓋 `index.html`、`style.css`、`script.js`、`config.js`、`README.md`，並執行 `migration_v12_fix_all_permissions.sql`。
+1. 覆蓋 GitHub repo 根目錄的 `index.html`、`style.css`、`script.js`、`config.js`。
+2. 開啟網站時使用 `?v=13`，確認左側顯示「雲端資料庫｜v13」。
+3. Supabase 權限只需要執行一次 `final_permissions.sql`。
+
+## v13 修正
+
+- 修正年度預算、流水帳等表單出現「未知表單：[object HTMLInputElement]」。
+- 修正原因：表單內有 `name="id"` 的隱藏欄位，導致 `form.id` 被 HTMLInputElement 覆蓋。現在全部改用 `form.getAttribute("id")`。
+- 修正訂閱表單不應同時進入通用儲存流程。
+- 刪除流程改成刪除後再查一次資料庫確認，不再依賴 Supabase 是否回傳被刪資料。
+- 權限 SQL 收斂成單一 `final_permissions.sql`。
