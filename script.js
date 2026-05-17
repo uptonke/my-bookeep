@@ -10,6 +10,7 @@ const state = {
   client: null,
   activeTab: "overview",
   loading: false,
+  alertTimer: null,
   selectedYearId: null,
   selectedBudgetYear: new Date().getFullYear(),
   draftTxType: "expense",
@@ -228,11 +229,40 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function showAlert(message, type = "warn") {
+function showAlert(message, type = "warn", options = {}) {
   const box = $("#alertBox");
+  if (state.alertTimer) {
+    clearTimeout(state.alertTimer);
+    state.alertTimer = null;
+  }
+
   box.className = `alert ${type === "bad" ? "bad" : type === "good" ? "good" : ""}`;
   box.innerHTML = message;
-  if (!message) box.classList.add("hidden");
+
+  if (!message) {
+    box.classList.add("hidden");
+    return;
+  }
+
+  box.classList.remove("hidden");
+
+  // 成功提示不要永久黏在頁面上；錯誤提示保留，避免漏看。
+  if (type === "good" && options.sticky !== true) {
+    state.alertTimer = setTimeout(() => {
+      box.classList.add("hidden");
+      box.innerHTML = "";
+      state.alertTimer = null;
+    }, options.timeout || 3500);
+  }
+}
+
+function syncPageChrome() {
+  const tab = pageMeta[state.activeTab] ? state.activeTab : "overview";
+  state.activeTab = tab;
+  $$(".nav-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tab));
+  const [title, subtitle] = pageMeta[tab] || pageMeta.overview;
+  $("#pageTitle").textContent = title;
+  $("#pageSubtitle").textContent = subtitle;
 }
 
 function setConnection(ok, text) {
@@ -481,16 +511,15 @@ function renderYearSelect() {
 }
 
 function setPage(tab) {
-  state.activeTab = tab;
-  $$(".nav-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tab));
-  const [title, subtitle] = pageMeta[tab] || pageMeta.overview;
-  $("#pageTitle").textContent = title;
-  $("#pageSubtitle").textContent = subtitle;
+  state.activeTab = pageMeta[tab] ? tab : "overview";
+  showAlert("");
+  syncPageChrome();
   render();
 }
 
 function render() {
   const app = $("#app");
+  syncPageChrome();
   destroyCharts();
   if (state.loading) {
     app.innerHTML = `<div class="empty">讀取中...</div>`;
