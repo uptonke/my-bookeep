@@ -525,6 +525,7 @@ function render() {
     app.innerHTML = `<div class="empty">讀取中...</div>`;
     return;
   }
+
   const renderers = {
     overview: renderOverview,
     transactions: renderTransactions,
@@ -539,9 +540,31 @@ function render() {
     settings: renderSettings,
     mobileMore: renderMobileMore
   };
-  app.innerHTML = (renderers[state.activeTab] || renderOverview)();
-  bindRenderedEvents();
-  initCharts();
+
+  try {
+    app.innerHTML = (renderers[state.activeTab] || renderOverview)();
+    bindRenderedEvents();
+    initCharts();
+  } catch (error) {
+    console.error(error);
+    app.innerHTML = `
+      <div class="card">
+        <h3>頁面載入失敗</h3>
+        <p class="metric-sub">目前頁面：${escapeHtml(pageMeta[state.activeTab]?.[0] || state.activeTab)}</p>
+        <p class="metric-sub">錯誤：${escapeHtml(error.message || String(error))}</p>
+        <div class="btn-row">
+          <button class="btn secondary" type="button" data-go="overview">回總覽</button>
+          <button class="btn secondary" type="button" id="refreshBtnInline">重新整理資料</button>
+        </div>
+      </div>
+    `;
+    $("#refreshBtnInline")?.addEventListener("click", async () => {
+      await loadAll();
+      render();
+    });
+    $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
+    showAlert(`頁面載入失敗：${escapeHtml(error.message || String(error))}`, "bad");
+  }
 }
 
 function renderOverview() {
@@ -1689,6 +1712,39 @@ function getHealthTrendRows() {
     const key = ["survival", "quality", "luxury", "investment"].includes(t.necessity_level) ? t.necessity_level : "other";
     row[key] += t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
   });
+  return rows;
+}
+
+
+function selectedYearTransactionMonths() {
+  return transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled")
+    .map(t => Number(t.tx_month || 0))
+    .filter(m => m >= 1 && m <= 12);
+}
+
+function activeMonthRange() {
+  const year = Number(state.selectedBudgetYear);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const months = selectedYearTransactionMonths();
+  const firstTxMonth = months.length ? Math.min(...months) : (year === currentYear ? currentMonth : 1);
+  const lastTxMonth = months.length ? Math.max(...months) : firstTxMonth;
+
+  const endMonth = year === currentYear ? Math.max(currentMonth, lastTxMonth) : lastTxMonth;
+  return {
+    startMonth: firstTxMonth,
+    endMonth: Math.min(12, Math.max(firstTxMonth, endMonth))
+  };
+}
+
+function activeMonthBuckets(factory) {
+  const { startMonth, endMonth } = activeMonthRange();
+  const rows = [];
+  for (let month = startMonth; month <= endMonth; month += 1) {
+    rows.push(factory(month));
+  }
   return rows;
 }
 
