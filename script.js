@@ -1,6 +1,7 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v14";
+const APP_VERSION = "v16";
+const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -50,7 +51,9 @@ const state = {
     txCategory: "",
     txAccount: "",
     txStart: "",
-    txEnd: ""
+    txEnd: "",
+    chartScope: "year",
+    chartCategory: ""
   },
   loadErrors: []
 };
@@ -61,7 +64,7 @@ const pageMeta = {
   budget: ["年度預算", "年度預算項目、結轉與預算使用率"],
   accounts: ["帳戶", "現金、銀行、電子支付、信用卡與其他帳戶"],
   categories: ["分類 / 標籤", "收支分類與交易標籤管理"],
-  recurring: ["訂閱管理", "管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 v14"],
+  recurring: ["訂閱管理", `管理訂閱、固定扣款、下次扣款日與取消狀態｜系統版本 ${APP_VERSION}`],
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
@@ -482,6 +485,7 @@ function setPage(tab) {
 
 function render() {
   const app = $("#app");
+  destroyCharts();
   if (state.loading) {
     app.innerHTML = `<div class="empty">讀取中...</div>`;
     return;
@@ -500,6 +504,7 @@ function render() {
   };
   app.innerHTML = (renderers[state.activeTab] || renderOverview)();
   bindRenderedEvents();
+  initCharts();
 }
 
 function renderOverview() {
@@ -528,6 +533,33 @@ function renderOverview() {
       <p class="metric-sub">可用預算 = 年度預算 + 前年盈餘結轉。支出會扣除退款，只計入狀態不是「已取消」的交易。</p>
     </div>
 
+    ${renderChartToolbar()}
+
+    <div class="grid cols-2">
+      <div class="card chart-card">
+        <div class="card-title-row"><h3>年度預算使用圖</h3><span class="badge">圓環圖</span></div>
+        <div class="chart-canvas-wrap tall"><canvas id="overviewBudgetChart"></canvas></div>
+        <p class="chart-note">這張固定看年度總預算，不受「本月 / 分類」篩選影響。</p>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title-row"><h3>分類淨支出排行</h3><span class="badge">長條圖</span></div>
+        <div class="chart-canvas-wrap tall"><canvas id="overviewCategoryChart"></canvas></div>
+        <p class="chart-note">${escapeHtml(chartScopeText())}。退款會從原分類扣回。</p>
+      </div>
+    </div>
+
+    <div class="grid cols-2">
+      <div class="card chart-card">
+        <div class="card-title-row"><h3>${state.filters.chartScope === "month" ? "本月日度收支趨勢" : "月度收支趨勢"}</h3><span class="badge">折線圖</span></div>
+        <div class="chart-canvas-wrap"><canvas id="overviewMonthlyChart"></canvas></div>
+        <p class="chart-note">${escapeHtml(chartScopeText())}。用來看節奏是否失控。</p>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title-row"><h3>分類預算進度</h3><span class="badge">進度條</span></div>
+        ${renderBudgetProgressList(8)}
+      </div>
+    </div>
+
     <div class="grid cols-2">
       <div class="card">
         <div class="card-title-row">
@@ -542,17 +574,6 @@ function renderOverview() {
           <button class="btn small secondary" data-go="transactions">查看全部</button>
         </div>
         ${renderSmallTxTable(tx)}
-      </div>
-    </div>
-
-    <div class="grid cols-2">
-      <div class="card">
-        <h3>本年分類淨支出前 8 名</h3>
-        ${renderCategoryChart("expense")}
-      </div>
-      <div class="card">
-        <h3>月現金流</h3>
-        ${renderMonthlyChart()}
       </div>
     </div>
   `;
@@ -1205,9 +1226,28 @@ function renderGoalCards() {
 
 function renderReports() {
   return `
+    ${renderChartToolbar()}
     <div class="grid cols-2">
-      <div class="card"><h3>分類淨支出</h3>${renderCategoryChart("expense", 14)}</div>
-      <div class="card"><h3>月現金流</h3>${renderMonthlyChart(14)}</div>
+      <div class="card chart-card">
+        <div class="card-title-row"><h3>年度預算使用圖</h3><span class="badge">圓環圖</span></div>
+        <div class="chart-canvas-wrap"><canvas id="reportsBudgetChart"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title-row"><h3>分類淨支出排行</h3><span class="badge">長條圖</span></div>
+        <div class="chart-canvas-wrap"><canvas id="reportsCategoryChart"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title-row"><h3>${state.filters.chartScope === "month" ? "本月日度收支趨勢" : "月度收支趨勢"}</h3><span class="badge">折線圖</span></div>
+        <div class="chart-canvas-wrap"><canvas id="reportsMonthlyChart"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title-row"><h3>預算 vs 實際</h3><span class="badge">橫向長條圖</span></div>
+        <div class="chart-canvas-wrap"><canvas id="reportsBudgetCompareChart"></canvas></div>
+      </div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-title-row"><h3>分類預算進度</h3><span class="badge">進度條</span></div>
+      ${renderBudgetProgressList(12)}
     </div>
     <div class="card">
       <h3>借貸帳</h3>
@@ -1323,6 +1363,308 @@ function renderMonthlyChart(limit = 12) {
     </div>
   `;
 }
+
+
+function renderChartToolbar() {
+  return `
+    <div class="chart-toolbar">
+      <div class="left">
+        <span class="chart-scope-note">圖表篩選</span>
+        <div class="segmented" role="group" aria-label="圖表範圍">
+          <button type="button" class="${state.filters.chartScope === "year" ? "active" : ""}" data-chart-scope="year">本年</button>
+          <button type="button" class="${state.filters.chartScope === "month" ? "active" : ""}" data-chart-scope="month">本月</button>
+        </div>
+      </div>
+      <div class="right">
+        <span class="chart-scope-note">分類</span>
+        <select class="input compact" id="chartCategoryFilter">
+          <option value="">全部分類</option>
+          ${state.data.categories
+            .filter(c => c.type === "expense")
+            .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name))
+            .map(c => `<option value="${escapeHtml(c.id)}" ${state.filters.chartCategory === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
+            .join("")}
+        </select>
+        <span class="chart-scope-note">${escapeHtml(chartScopeText())}</span>
+      </div>
+    </div>
+  `;
+}
+
+function chartScopeText() {
+  const category = state.data.categories.find(c => c.id === state.filters.chartCategory)?.name || "全部分類";
+  const scope = state.filters.chartScope === "month" ? `${new Date().getMonth() + 1} 月` : `${state.selectedBudgetYear} 年`;
+  return `${scope}｜${category}`;
+}
+
+function renderBudgetProgressList(limit = 8) {
+  const rows = getBudgetCompareRows(limit);
+  if (!rows.length) return `<div class="empty">尚無預算項目</div>`;
+  return `
+    <div class="budget-progress-list">
+      ${rows.map(r => {
+        const pct = r.planned ? Math.max(0, r.actual / r.planned * 100) : 0;
+        return `
+          <div class="budget-progress-item">
+            <div class="top">
+              <strong>${escapeHtml(r.name)}</strong>
+              <span class="badge ${pct > 100 ? "expense" : "income"}">${fmtNumber(pct, 1)}%</span>
+            </div>
+            <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, pct)}%"></span></div>
+            <div class="meta">
+              <span>實際 ${fmtMoney(r.actual)}</span>
+              <span>預算 ${fmtMoney(r.planned)}</span>
+              <span>${Number(r.remaining || 0) >= 0 ? `剩餘 ${fmtMoney(r.remaining)}` : `超支 ${fmtMoney(Math.abs(Number(r.remaining || 0)))}`}</span>
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function chartTransactions() {
+  const currentMonth = new Date().getMonth() + 1;
+  return transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled")
+    .filter(t => state.filters.chartScope !== "month" || Number(t.tx_month) === currentMonth)
+    .filter(t => !state.filters.chartCategory || t.category_id === state.filters.chartCategory);
+}
+
+function getBudgetUsageChartData() {
+  const s = getCurrentYearSummary();
+  const available = Number(s.available_budget || 0);
+  const used = Math.max(0, Number(s.actual_expense || 0));
+  const usedWithinBudget = Math.min(used, available);
+  const overspend = Math.max(0, used - available);
+  const remaining = Math.max(0, available - used);
+
+  if (available <= 0 && used <= 0) return null;
+
+  if (overspend > 0) {
+    return {
+      labels: ["預算內使用", "超支部分"],
+      data: [usedWithinBudget, overspend],
+      colors: ["rgba(10, 132, 255, 0.92)", "rgba(255, 69, 58, 0.92)"]
+    };
+  }
+
+  return {
+    labels: ["已使用", "剩餘"],
+    data: [used, remaining],
+    colors: ["rgba(10, 132, 255, 0.92)", "rgba(48, 209, 88, 0.92)"]
+  };
+}
+
+function getCategoryNetExpenseRows(limit = 8) {
+  const grouped = new Map();
+  chartTransactions().forEach(t => {
+    if (!["expense", "refund"].includes(t.type)) return;
+    const key = t.category_id || t.category_name || "uncategorized";
+    const name = t.category_name || "未分類";
+    const delta = t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
+    grouped.set(key, { name, amount: Number((grouped.get(key)?.amount || 0) + delta) });
+  });
+
+  return Array.from(grouped.values())
+    .filter(r => Number(r.amount || 0) > 0)
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, limit);
+}
+
+function getTrendRows() {
+  const rows = chartTransactions();
+  if (state.filters.chartScope === "month") {
+    const currentMonth = new Date().getMonth() + 1;
+    const daysInMonth = new Date(Number(state.selectedBudgetYear), currentMonth, 0).getDate();
+    const buckets = Array.from({ length: daysInMonth }, (_, i) => ({ label: `${i + 1}日`, income: 0, expense: 0, net: 0 }));
+    rows.forEach(t => {
+      const date = t.transaction_date ? new Date(`${t.transaction_date}T00:00:00`) : null;
+      const day = date ? date.getDate() : 0;
+      if (!day || day < 1 || day > daysInMonth) return;
+      const bucket = buckets[day - 1];
+      if (t.type === "income") bucket.income += Number(t.amount || 0);
+      if (t.type === "expense") bucket.expense += Number(t.amount || 0);
+      if (t.type === "refund") bucket.expense -= Number(t.amount || 0);
+    });
+    buckets.forEach(b => { b.net = b.income - b.expense; });
+    return buckets;
+  }
+
+  const buckets = Array.from({ length: 12 }, (_, i) => ({ label: `${i + 1}月`, income: 0, expense: 0, net: 0 }));
+  rows.forEach(t => {
+    const month = Number(t.tx_month || 0);
+    if (!month || month < 1 || month > 12) return;
+    const bucket = buckets[month - 1];
+    if (t.type === "income") bucket.income += Number(t.amount || 0);
+    if (t.type === "expense") bucket.expense += Number(t.amount || 0);
+    if (t.type === "refund") bucket.expense -= Number(t.amount || 0);
+  });
+  buckets.forEach(b => { b.net = b.income - b.expense; });
+  return buckets;
+}
+
+function getBudgetCompareRows(limit = 8) {
+  let rows = budgetItemSummariesForSelectedYear()
+    .filter(r => Number(r.planned_amount || 0) > 0);
+
+  if (state.filters.chartCategory) {
+    rows = rows.filter(r => r.category_id === state.filters.chartCategory);
+  }
+
+  return rows
+    .sort((a, b) => Number(b.planned_amount || 0) - Number(a.planned_amount || 0))
+    .slice(0, limit)
+    .map(r => ({
+      name: r.name,
+      planned: Number(r.planned_amount || 0),
+      actual: Number(r.actual_amount || 0),
+      remaining: Number(r.remaining_amount || 0)
+    }));
+}
+
+function shortMoney(value) {
+  const n = Number(value || 0);
+  const abs = Math.abs(n);
+  if (abs >= 10000) return `${fmtNumber(n / 10000, abs >= 100000 ? 0 : 1)}萬`;
+  return fmtNumber(n, 0);
+}
+
+function chartTheme() {
+  const css = getComputedStyle(document.documentElement);
+  return {
+    text: css.getPropertyValue("--text").trim() || "#f8fafc",
+    muted: css.getPropertyValue("--muted").trim() || "#94a3b8",
+    grid: "rgba(148, 163, 184, 0.15)",
+    blue: "rgba(10, 132, 255, 0.92)",
+    green: "rgba(48, 209, 88, 0.88)",
+    red: "rgba(255, 69, 58, 0.88)",
+    purple: "rgba(94, 92, 230, 0.92)",
+    orange: "rgba(255, 159, 10, 0.88)"
+  };
+}
+
+function destroyCharts() {
+  Object.keys(chartInstances).forEach(key => {
+    try { chartInstances[key]?.destroy?.(); } catch (error) { console.warn(error); }
+    delete chartInstances[key];
+  });
+}
+
+function initCharts() {
+  if (!window.Chart) return;
+  if (!["overview", "reports"].includes(state.activeTab)) return;
+  const theme = chartTheme();
+  const moneyTick = value => shortMoney(value);
+  const moneyTooltip = value => fmtMoney(value);
+
+  Chart.defaults.font.family = 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Segoe UI", sans-serif';
+
+  const baseOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 240 },
+    plugins: {
+      legend: { labels: { color: theme.text, usePointStyle: true, pointStyle: "circle", boxWidth: 8, boxHeight: 8 } },
+      tooltip: { callbacks: { label: ctx => `${ctx.dataset?.label || ctx.label}：${moneyTooltip(ctx.parsed.x ?? ctx.parsed.y ?? ctx.parsed)}` } }
+    }
+  };
+
+  const makeDoughnut = id => {
+    const el = document.getElementById(id);
+    const chartData = getBudgetUsageChartData();
+    if (!el || !chartData) return;
+    chartInstances[id] = new Chart(el, {
+      type: "doughnut",
+      data: { labels: chartData.labels, datasets: [{ data: chartData.data, backgroundColor: chartData.colors, borderWidth: 0, hoverOffset: 4 }] },
+      options: {
+        ...baseOptions,
+        cutout: "70%",
+        plugins: {
+          ...baseOptions.plugins,
+          tooltip: { callbacks: { label: ctx => `${ctx.label}：${moneyTooltip(ctx.parsed)}` } }
+        }
+      }
+    });
+  };
+
+  const makeCategoryBar = id => {
+    const el = document.getElementById(id);
+    const rows = getCategoryNetExpenseRows(8);
+    if (!el || !rows.length) return;
+    chartInstances[id] = new Chart(el, {
+      type: "bar",
+      data: {
+        labels: rows.map(r => r.name),
+        datasets: [{ label: "淨支出", data: rows.map(r => r.amount), backgroundColor: theme.blue, borderRadius: 10, borderSkipped: false }]
+      },
+      options: {
+        ...baseOptions,
+        indexAxis: "y",
+        plugins: { ...baseOptions.plugins, legend: { display: false } },
+        scales: {
+          x: { ticks: { color: theme.muted, callback: moneyTick }, grid: { color: theme.grid } },
+          y: { ticks: { color: theme.text }, grid: { display: false } }
+        }
+      }
+    });
+  };
+
+  const makeTrendLine = id => {
+    const el = document.getElementById(id);
+    const rows = getTrendRows();
+    const hasData = rows.some(r => r.income || r.expense || r.net);
+    if (!el || !hasData) return;
+    chartInstances[id] = new Chart(el, {
+      type: "line",
+      data: {
+        labels: rows.map(r => r.label),
+        datasets: [
+          { label: "收入", data: rows.map(r => r.income), borderColor: theme.green, backgroundColor: "rgba(48, 209, 88, 0.12)", tension: 0.32, pointRadius: 2, fill: false },
+          { label: "淨支出", data: rows.map(r => r.expense), borderColor: theme.red, backgroundColor: "rgba(255, 69, 58, 0.12)", tension: 0.32, pointRadius: 2, fill: false },
+          { label: "淨現金流", data: rows.map(r => r.net), borderColor: theme.purple, backgroundColor: "rgba(94, 92, 230, 0.12)", tension: 0.32, pointRadius: 2, fill: false }
+        ]
+      },
+      options: {
+        ...baseOptions,
+        scales: {
+          x: { ticks: { color: theme.muted, maxTicksLimit: state.filters.chartScope === "month" ? 8 : 12 }, grid: { color: theme.grid } },
+          y: { ticks: { color: theme.muted, callback: moneyTick }, grid: { color: theme.grid } }
+        }
+      }
+    });
+  };
+
+  const makeBudgetCompare = id => {
+    const el = document.getElementById(id);
+    const rows = getBudgetCompareRows(8);
+    if (!el || !rows.length) return;
+    chartInstances[id] = new Chart(el, {
+      type: "bar",
+      data: {
+        labels: rows.map(r => r.name),
+        datasets: [
+          { label: "預算", data: rows.map(r => r.planned), backgroundColor: theme.green, borderRadius: 10, borderSkipped: false },
+          { label: "實際", data: rows.map(r => r.actual), backgroundColor: theme.blue, borderRadius: 10, borderSkipped: false }
+        ]
+      },
+      options: {
+        ...baseOptions,
+        indexAxis: "y",
+        scales: {
+          x: { ticks: { color: theme.muted, callback: moneyTick }, grid: { color: theme.grid } },
+          y: { ticks: { color: theme.text }, grid: { display: false } }
+        }
+      }
+    });
+  };
+
+  ["overviewBudgetChart", "reportsBudgetChart"].forEach(makeDoughnut);
+  ["overviewCategoryChart", "reportsCategoryChart"].forEach(makeCategoryBar);
+  ["overviewMonthlyChart", "reportsMonthlyChart"].forEach(makeTrendLine);
+  makeBudgetCompare("reportsBudgetCompareChart");
+}
+
 
 function field(label, html) {
   return `<div class="field"><label>${escapeHtml(label)}</label>${html}</div>`;
@@ -1792,6 +2134,16 @@ function bindRenderedEvents() {
   $("#recurringForm")?.addEventListener("submit", handleRecurringSubmit);
   $$("form").filter(form => form.getAttribute("id") !== "recurringForm").forEach(form => form.addEventListener("submit", handleSubmit));
 
+  $$("[data-chart-scope]").forEach(btn => btn.addEventListener("click", () => {
+    state.filters.chartScope = btn.dataset.chartScope || "year";
+    render();
+  }));
+
+  $("#chartCategoryFilter")?.addEventListener("change", e => {
+    state.filters.chartCategory = e.target.value;
+    render();
+  });
+
   $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
 
   $$("[data-cancel-edit]").forEach(btn => btn.addEventListener("click", () => {
@@ -1897,7 +2249,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v14 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v16 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
