@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v28";
+const APP_VERSION = "v29";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -2119,9 +2119,9 @@ function renderSettings() {
       </div>
       <div class="card">
         <h3>資料匯出</h3>
-        <p class="metric-sub">匯出目前年度流水帳表格，或下載畫面目前暫存的資料備份。</p>
+        <p class="metric-sub">匯出 Excel 可正常顯示中文的 CSV，或下載畫面目前暫存的資料備份。</p>
         <div class="btn-row">
-          <button class="btn secondary" id="exportCsvBtn">匯出目前年度表格</button>
+          <button class="btn secondary" id="exportCsvBtn">匯出 Excel CSV</button>
           <button class="btn secondary" id="downloadJsonBtn">下載暫存資料</button>
         </div>
       </div>
@@ -2858,7 +2858,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v28 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v29 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -2894,7 +2894,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v28 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v29 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3288,7 +3288,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v28 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v29 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
@@ -3363,15 +3363,26 @@ ${message}`));
   });
 }
 
-function toCsv(rows) {
-  if (!rows.length) return "";
-  const headers = Object.keys(rows[0]);
-  const escape = v => `"${String(v ?? "").replaceAll('"', '""')}"`;
-  return [headers.join(","), ...rows.map(r => headers.map(h => escape(r[h])).join(","))].join("\n");
+function excelSafeText(value) {
+  const text = String(value ?? "");
+  // 避免 Excel 把以 = + - @ 開頭的內容當成公式。
+  return /^[=+\-@]/.test(text) ? `'${text}` : text;
 }
 
-function downloadFile(filename, content, mime = "text/plain;charset=utf-8") {
-  const blob = new Blob([content], { type: mime });
+function toCsv(rows, headers = null) {
+  if (!rows.length) return "";
+  const columns = headers || Object.keys(rows[0]).map(key => ({ key, label: key }));
+  const escape = v => `"${excelSafeText(v).replaceAll('"', '""')}"`;
+  const lines = [
+    columns.map(c => escape(c.label)).join(","),
+    ...rows.map(r => columns.map(c => escape(r[c.key])).join(","))
+  ];
+  return lines.join("\r\n");
+}
+
+function downloadFile(filename, content, mime = "text/plain;charset=utf-8", options = {}) {
+  const finalContent = options.bom ? "\uFEFF" + content : content;
+  const blob = new Blob([finalContent], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -3382,9 +3393,51 @@ function downloadFile(filename, content, mime = "text/plain;charset=utf-8") {
   URL.revokeObjectURL(url);
 }
 
+function transactionExportRows(rows) {
+  return rows.map(t => ({
+    date: t.transaction_date || "",
+    type: labelOf(t.type),
+    amount: Number(t.amount || 0),
+    account: t.account_name || "",
+    to_account: t.to_account_name || "",
+    category: t.category_name || "",
+    budget_item: t.budget_item_name || "",
+    merchant: t.merchant || "",
+    payment_method: t.payment_method || "",
+    necessity_level: labelOf(t.necessity_level),
+    cashflow_nature: labelOf(t.cashflow_nature),
+    status: labelOf(t.status),
+    note: t.note || "",
+    tx_year: t.tx_year || "",
+    tx_month: t.tx_month || "",
+    created_at: t.created_at || "",
+    updated_at: t.updated_at || ""
+  }));
+}
+
 function exportCurrentYearCsv() {
-  const rows = applyTxFilters(transactionsForSelectedYear());
-  downloadFile(`流水帳_${state.selectedBudgetYear}.csv`, toCsv(rows), "text/csv;charset=utf-8");
+  const rows = transactionExportRows(applyTxFilters(transactionsForSelectedYear()));
+  const headers = [
+    { key: "date", label: "日期" },
+    { key: "type", label: "類型" },
+    { key: "amount", label: "金額" },
+    { key: "account", label: "帳戶" },
+    { key: "to_account", label: "轉入帳戶" },
+    { key: "category", label: "分類" },
+    { key: "budget_item", label: "預算項目" },
+    { key: "merchant", label: "商家 / 對象" },
+    { key: "payment_method", label: "付款方式" },
+    { key: "necessity_level", label: "必要程度" },
+    { key: "cashflow_nature", label: "現金流性質" },
+    { key: "status", label: "狀態" },
+    { key: "note", label: "備註" },
+    { key: "tx_year", label: "年度" },
+    { key: "tx_month", label: "月份" },
+    { key: "created_at", label: "建立時間" },
+    { key: "updated_at", label: "更新時間" }
+  ];
+  downloadFile(`流水帳_${state.selectedBudgetYear}_Excel_UTF8.csv`, toCsv(rows, headers), "text/csv;charset=utf-8", { bom: true });
+  showAlert("已匯出 Excel 可讀 CSV。若 Excel 跳出格式提醒，選「另存新檔」即可；中文亂碼問題已用 UTF-8 BOM 修正。", "good");
 }
 
 function downloadCacheJson() {
