@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v27";
+const APP_VERSION = "v28";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -14,6 +14,7 @@ const state = {
   selectedBudgetYear: new Date().getFullYear(),
   draftTxType: "expense",
   draftRecurringType: "expense",
+  pendingTemplateKey: null,
   data: {
     years: [],
     accounts: [],
@@ -721,8 +722,30 @@ function setSelectValue(select, value) {
 
 function applyQuickTxTemplate(key) {
   const template = activeQuickTemplates().find(t => t.key === key);
+  if (!template) {
+    showAlert("找不到這個快速模板。請重新整理後再試。", "bad");
+    return;
+  }
+
+  const targetType = template.type || "expense";
+
+  if (state.draftTxType !== targetType) {
+    state.draftTxType = targetType;
+    state.pendingTemplateKey = key;
+    render();
+    requestAnimationFrame(() => {
+      const pending = state.pendingTemplateKey;
+      state.pendingTemplateKey = null;
+      if (pending) applyQuickTxTemplate(pending);
+    });
+    return;
+  }
+
   const form = $("#txForm");
-  if (!template || !form) return;
+  if (!form) {
+    showAlert("目前找不到記帳表單。", "bad");
+    return;
+  }
 
   const category = template.category_id
     ? state.data.categories.find(c => c.id === template.category_id)
@@ -737,118 +760,40 @@ function applyQuickTxTemplate(key) {
     ? state.data.accounts.find(a => a.id === template.to_account_id)
     : null;
 
-  const type = template.type || "expense";
-  setSelectValue(form.elements.type, type);
-  state.draftTxType = type;
-  setSelectValue(form.elements.account_id, form.elements.account_id.value || account?.id || "");
+  setSelectValue(form.elements.type, targetType);
+  setSelectValue(form.elements.account_id, form.elements.account_id?.value || account?.id || "");
   setSelectValue(form.elements.to_account_id, toAccount?.id || "");
   setSelectValue(form.elements.category_id, category?.id || "");
   setSelectValue(form.elements.budget_item_id, budgetItem?.budget_item_id || budgetItem?.id || "");
-  setSelectValue(form.elements.necessity_level, template.necessity_level || template.necessity || "other");
-  setSelectValue(form.elements.cashflow_nature, template.cashflow_nature || template.cashflow || "variable");
+  setSelectValue(form.elements.necessity_level, template.necessity_level || template.necessity || defaultNecessityByType(targetType));
+  setSelectValue(form.elements.cashflow_nature, template.cashflow_nature || template.cashflow || defaultCashflowByType(targetType));
   setSelectValue(form.elements.status, "cleared");
 
-  if (!form.elements.merchant.value) form.elements.merchant.value = template.merchant || template.name || template.label || "";
-  if (!form.elements.payment_method.value) form.elements.payment_method.value = template.payment_method || (account?.type === "credit_card" ? "信用卡" : labelOf(account?.type || ""));
-  if (!form.elements.note.value && template.note) form.elements.note.value = template.note;
-
-  form.elements.amount?.focus();
-  form.elements.amount?.select?.();
-}
-
-
-
-function txModeButton(type, current) {
-  const labels = {
-    expense: ["支出", "消費 / 預算"],
-    income: ["收入", "薪資 / 股息"],
-    transfer: ["轉帳", "繳卡 / 投資"],
-    refund: ["退款", "退貨 / 退票"]
-  };
-  const [title, sub] = labels[type] || [labelOf(type), ""];
-  return `
-    <button type="button" class="tx-mode-btn ${current === type ? "active" : ""}" data-tx-mode="${escapeHtml(type)}">
-      <strong>${escapeHtml(title)}</strong>
-      <span>${escapeHtml(sub)}</span>
-    </button>
-  `;
-}
-
-function renderTxModePicker(current) {
-  return `
-    <div class="tx-mode-panel">
-      ${["expense", "income", "transfer", "refund"].map(t => txModeButton(t, current)).join("")}
-    </div>
-  `;
-}
-
-function renderTxPrimaryFields(type, edit = {}) {
-  const accountLabel = type === "income" ? "入帳帳戶" : type === "transfer" ? "轉出帳戶" : type === "refund" ? "退款入帳帳戶" : "付款帳戶";
-  const merchantLabel = type === "income" ? "收入來源" : type === "transfer" ? "用途" : type === "refund" ? "退款來源" : "商家 / 對象";
-  const merchantPlaceholder = type === "income" ? "例：打工薪資、股息、退稅" : type === "transfer" ? "例：信用卡繳款、投資轉帳" : type === "refund" ? "例：退票退款、退貨退款" : "例：早餐、威秀、Blue Note";
-  const categoryLabel = type === "income" ? "收入分類" : "分類";
-
-  const fields = [
-    field("日期", `<input class="input" type="date" name="transaction_date" value="${escapeHtml(edit?.transaction_date || today())}" required>`),
-    field("金額", `<input class="input tx-amount-input" type="number" min="0" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="輸入金額">`),
-    field(accountLabel, `<select class="input" name="account_id" required>${accountOptions(edit?.account_id || "")}</select>`)
-  ];
-
-  if (type === "transfer") {
-    fields.push(field("轉入帳戶", `<select class="input" name="to_account_id" required>${accountOptions(edit?.to_account_id || "")}</select>`));
-    fields.push(field("用途", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="${merchantPlaceholder}">`));
-  } else {
-    fields.push(field(categoryLabel, `<select class="input" name="category_id">${categoryOptions(type, edit?.category_id || "")}</select>`));
-    if (type === "expense" || type === "refund") {
-      fields.push(field("預算項目", `<select class="input" name="budget_item_id">${budgetItemOptions(edit?.budget_item_id || "")}</select>`));
-    }
-    if (type === "refund") {
-      fields.push(field("關聯原支出", `<select class="input" name="related_transaction_id">${expenseTransactionOptions(edit?.related_transaction_id || "")}</select>`));
-    }
-    fields.push(field(merchantLabel, `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="${merchantPlaceholder}">`));
+  if (form.elements.merchant && !form.elements.merchant.value) {
+    form.elements.merchant.value = template.merchant || template.name || template.label || "";
+  }
+  if (form.elements.payment_method && !form.elements.payment_method.value) {
+    form.elements.payment_method.value = template.payment_method || (account?.type === "credit_card" ? "信用卡" : labelOf(account?.type || ""));
+  }
+  if (form.elements.note && !form.elements.note.value && template.note) {
+    form.elements.note.value = template.note;
   }
 
-  return fields.join("");
+  const advanced = $(".advanced-fields", form);
+  if (advanced && (template.payment_method || template.note || template.necessity_level || template.cashflow_nature)) {
+    advanced.open = true;
+  }
+
+  showAlert(`已套用模板：${escapeHtml(template.name || "快速模板")}。請輸入金額後儲存。`, "good");
+
+  const amount = form.elements.amount;
+  if (amount) {
+    amount.focus();
+    amount.select?.();
+  }
 }
 
-function renderTxAdvancedFields(type, edit = {}) {
-  return `
-    <details class="advanced-fields wide">
-      <summary>進階欄位</summary>
-      <div class="form-grid">
-        ${type !== "transfer" ? field("轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`) : ""}
-        ${type !== "refund" ? field("關聯原支出", `<select class="input" name="related_transaction_id">${expenseTransactionOptions(edit?.related_transaction_id || "")}</select>`) : ""}
-        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="現金 / 信用卡 / 轉帳 / Apple Pay">`)}
-        ${field("必要程度", `<select class="input" name="necessity_level">
-          ${selectOpts(["survival","quality","luxury","investment","other"], edit?.necessity_level || defaultNecessityByType(type))}
-        </select>`)}
-        ${field("現金流性質", `<select class="input" name="cashflow_nature">
-          ${selectOpts(["fixed","variable","one_time"], edit?.cashflow_nature || defaultCashflowByType(type))}
-        </select>`)}
-        ${field("狀態", `<select class="input" name="status">
-          ${selectOpts(["cleared","pending","cancelled"], edit?.status || "cleared")}
-        </select>`)}
-        <div class="field wide">
-          <label>備註</label>
-          <textarea class="input" name="note" placeholder="補充說明">${escapeHtml(edit?.note || "")}</textarea>
-        </div>
-      </div>
-    </details>
-  `;
-}
 
-function defaultNecessityByType(type) {
-  if (type === "income" || type === "transfer") return "other";
-  if (type === "refund") return "other";
-  return "quality";
-}
-
-function defaultCashflowByType(type) {
-  if (type === "income") return "fixed";
-  if (type === "transfer") return "fixed";
-  if (type === "refund") return "one_time";
-  return "variable";
-}
 
 function renderTransactions() {
   const edit = state.editing.transaction;
@@ -2845,7 +2790,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v27 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v28 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -2881,7 +2826,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v27 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v28 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3138,13 +3083,18 @@ function bindRenderedEvents() {
   $("#recurringForm")?.addEventListener("submit", handleRecurringSubmit);
   $$("form").filter(form => form.getAttribute("id") !== "recurringForm").forEach(form => form.addEventListener("submit", handleSubmit));
 
-  $$("[data-tx-mode]").forEach(btn => btn.addEventListener("click", () => {
+  $$("[data-tx-mode]").forEach(btn => btn.addEventListener("click", event => {
+    event.preventDefault();
     state.draftTxType = btn.dataset.txMode || "expense";
     state.editing.transaction = null;
     render();
   }));
 
-  $$("[data-tx-template]").forEach(btn => btn.addEventListener("click", () => applyQuickTxTemplate(btn.dataset.txTemplate)));
+  $$("[data-tx-template]").forEach(btn => btn.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    applyQuickTxTemplate(btn.dataset.txTemplate);
+  }));
 
   $("#seedDefaultTemplatesBtn")?.addEventListener("click", async () => {
     try {
@@ -3275,7 +3225,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v27 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v28 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
