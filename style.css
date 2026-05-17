@@ -1435,3 +1435,13 @@ td.actions { width: 126px; }
     line-height: 1.45;
   }
 }
+
+
+/* v25: 顯示內建模板 */
+.builtin-template-card {
+  opacity: 0.86;
+}
+
+.builtin-template-list .mobile-card-actions {
+  display: none;
+}

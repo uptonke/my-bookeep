@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v24";
+const APP_VERSION = "v25";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -665,9 +665,10 @@ const fallbackQuickTemplates = [
 function activeQuickTemplates() {
   const rows = (state.data.quickTemplates || [])
     .filter(t => t.is_active !== false)
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name || "").localeCompare(String(b.name || "")));
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+    .map(t => ({ ...t, key: `custom-${t.id}`, is_builtin: false }));
 
-  return rows.length ? rows.map(t => ({ ...t, key: `custom-${t.id}`, is_builtin: false })) : fallbackQuickTemplates;
+  return [...rows, ...fallbackQuickTemplates];
 }
 
 function renderQuickTxTemplates() {
@@ -676,7 +677,7 @@ function renderQuickTxTemplates() {
     <div class="quick-template-panel">
       <div class="quick-template-title">
         <strong>快速模板</strong>
-        <span>${state.data.quickTemplates?.length ? "自訂模板" : "預設模板；可到「更多 → 模板管理」自訂"}</span>
+        <span>${state.data.quickTemplates?.length ? "自訂模板 + 內建模板" : "內建模板；可到「更多 → 模板管理」自訂"}</span>
       </div>
       <div class="quick-template-grid">
         ${templates.map(t => `<button type="button" class="quick-template-btn" data-tx-template="${escapeHtml(t.key)}">${escapeHtml(t.name || t.label || "模板")}</button>`).join("")}
@@ -1924,9 +1925,9 @@ function renderTemplates() {
     <div class="card">
       <div class="card-title-row">
         <h3>${edit ? "編輯快速模板" : "新增快速模板"}</h3>
-        <span class="badge">v24</span>
+        <span class="badge">v25</span>
       </div>
-      <p class="metric-sub">模板會出現在「記一筆」頁上方。點模板後會自動帶入分類、預算項目、必要程度與現金流性質，你只要輸入金額。</p>
+      <p class="metric-sub">模板會出現在「記一筆」頁上方。自訂模板會排在前面；內建模板會保留在後面當備用。</p>
       <form id="quickTemplateForm" class="form-grid">
         <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
         ${field("模板名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Blue Note、午餐、打工薪水">`)}
@@ -1957,21 +1958,26 @@ function renderTemplates() {
 
     <div class="card">
       <div class="card-title-row">
-        <h3>快速模板列表</h3>
+        <h3>自訂快速模板</h3>
         <span class="badge">${rows.length} 個</span>
       </div>
       ${renderTemplateCards(rows)}
+    </div>
+
+    <div class="card">
+      <div class="card-title-row">
+        <h3>內建預設模板</h3>
+        <span class="badge">${fallbackQuickTemplates.length} 個</span>
+      </div>
+      <p class="metric-sub">內建模板不用存進資料庫，所以不能編輯或刪除。若要改內容，請在上方新增自訂模板。</p>
+      ${renderBuiltinTemplateCards()}
     </div>
   `;
 }
 
 function renderTemplateCards(rows) {
   if (!rows.length) {
-    return `
-      <div class="empty">
-        尚無自訂模板。記一筆頁目前會使用預設模板；新增任一自訂模板後，會改用你的自訂模板。
-      </div>
-    `;
+    return `<div class="empty">尚無自訂模板。記一筆頁仍會顯示下方內建預設模板。</div>`;
   }
 
   return `
@@ -2005,6 +2011,32 @@ function renderTemplateCards(rows) {
     </div>
   `;
 }
+
+
+function renderBuiltinTemplateCards() {
+  return `
+    <div class="mobile-card-list always-card-list builtin-template-list">
+      ${fallbackQuickTemplates.map(t => `
+        <div class="mobile-data-card builtin-template-card">
+          <div class="mobile-data-head">
+            <div>
+              <strong>${escapeHtml(t.name)}</strong>
+              <span>${escapeHtml(labelOf(t.type))} · 內建模板</span>
+            </div>
+            <span class="badge">內建</span>
+          </div>
+          <div class="mobile-data-meta">
+            <span class="badge">${escapeHtml(labelOf(t.necessity_level || "other"))}</span>
+            <span class="badge">${escapeHtml(labelOf(t.cashflow_nature || "variable"))}</span>
+            ${t.categoryNames?.[0] ? `<span class="badge">${escapeHtml(t.categoryNames[0])}</span>` : ""}
+            ${t.budgetNames?.[0] ? `<span class="badge">${escapeHtml(t.budgetNames[0])}</span>` : ""}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 
 function renderMobileMore() {
   const items = [
@@ -2778,7 +2810,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v24 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v25 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -2814,7 +2846,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v24 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v25 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3153,7 +3185,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v24 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v25 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
