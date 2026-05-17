@@ -925,3 +925,213 @@ td.actions { width: 126px; }
     min-height: 235px;
   }
 }
+
+
+/* =========================================================
+   v20 手機 UX 重構：底部 5 主入口、快速操作、卡片列表
+   只影響手機；桌機維持原本體驗
+   ========================================================= */
+.mobile-fab,
+.mobile-action-grid,
+.mobile-card-list,
+.mobile-more-nav,
+.mobile-more-grid {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .mobile-fab {
+    display: block;
+    position: fixed;
+    right: 16px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    z-index: 55;
+    border: 1px solid rgba(56, 189, 248, .55);
+    background: linear-gradient(135deg, rgba(56,189,248,.96), rgba(129,140,248,.96));
+    color: #020617;
+    font-weight: 900;
+    padding: 13px 16px;
+    border-radius: 999px;
+    box-shadow: 0 18px 46px rgba(0,0,0,.32);
+  }
+
+  body:has(.nav-btn[data-tab="transactions"].active) .mobile-fab {
+    display: none;
+  }
+
+  .mobile-action-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .mobile-action-card {
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: rgba(255,255,255,.075);
+    color: var(--text);
+    padding: 14px;
+    text-align: left;
+    display: grid;
+    gap: 4px;
+  }
+
+  .mobile-action-card.primary {
+    background: linear-gradient(135deg, rgba(56,189,248,.22), rgba(129,140,248,.20));
+    border-color: rgba(56,189,248,.32);
+  }
+
+  .mobile-action-card strong {
+    font-size: 16px;
+  }
+
+  .mobile-action-card span {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .nav {
+    grid-auto-columns: minmax(68px, 1fr);
+  }
+
+  .nav-btn {
+    display: none;
+  }
+
+  .nav-btn[data-tab="overview"],
+  .nav-btn[data-tab="transactions"],
+  .nav-btn[data-tab="budget"],
+  .nav-btn[data-tab="reports"],
+  .nav-btn.mobile-more-nav {
+    display: block;
+  }
+
+  .nav-btn[data-tab="transactions"] {
+    font-size: 0;
+  }
+
+  .nav-btn[data-tab="transactions"]::after {
+    content: "記一筆";
+    font-size: 12px;
+  }
+
+  .nav-btn[data-tab="reports"] {
+    font-size: 0;
+  }
+
+  .nav-btn[data-tab="reports"]::after {
+    content: "圖表";
+    font-size: 12px;
+  }
+
+  .mobile-more-grid {
+    display: grid;
+    gap: 10px;
+  }
+
+  .mobile-more-card {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: rgba(255,255,255,.075);
+    color: var(--text);
+    padding: 14px;
+    text-align: left;
+    display: grid;
+    gap: 5px;
+  }
+
+  .mobile-more-card strong {
+    font-size: 16px;
+  }
+
+  .mobile-more-card span {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .mobile-card-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .desktop-table {
+    display: none;
+  }
+
+  .mobile-data-card {
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: rgba(255,255,255,.065);
+    padding: 13px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .mobile-data-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .mobile-data-head strong {
+    display: block;
+    font-size: 15px;
+    line-height: 1.3;
+  }
+
+  .mobile-data-head span {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 3px;
+  }
+
+  .mobile-amount {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "JetBrains Mono", monospace;
+    font-weight: 900;
+    white-space: nowrap;
+  }
+
+  .mobile-data-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .mobile-note {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .mobile-card-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .mobile-card-actions .btn {
+    width: 100%;
+  }
+
+  .table-wrap::after {
+    display: none;
+  }
+
+  /* 表單降噪：手機把次要欄位視覺權重降低 */
+  #txForm .field:nth-of-type(n+8) label,
+  #budgetItemForm .field:nth-of-type(n+7) label {
+    color: var(--subtle);
+  }
+
+  #txForm .field:nth-of-type(n+8),
+  #budgetItemForm .field:nth-of-type(n+7) {
+    opacity: 0.92;
+  }
+}

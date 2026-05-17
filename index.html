@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>個人記帳系統</title>
-  <link rel="stylesheet" href="./style.css?v=19" />
+  <link rel="stylesheet" href="./style.css?v=20" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script defer src="./config.js?v=19"></script>
-  <script defer src="./script.js?v=19"></script>
+  <script defer src="./config.js?v=20"></script>
+  <script defer src="./script.js?v=20"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -17,7 +17,7 @@
         <div class="brand-mark">帳</div>
         <div>
           <h1>個人記帳</h1>
-          <p>雲端資料庫｜v19</p>
+          <p>雲端資料庫｜v20</p>
         </div>
       </div>
 
@@ -32,6 +32,7 @@
         <button class="nav-btn" data-tab="goals">目標</button>
         <button class="nav-btn" data-tab="reports">報表</button>
         <button class="nav-btn" data-tab="settings">設定</button>
+        <button class="nav-btn mobile-more-nav" data-tab="mobileMore">更多</button>
       </nav>
 
       <div class="sidebar-footer">
@@ -55,6 +56,7 @@
 
       <section id="alertBox" class="alert hidden"></section>
       <section id="app" class="content"></section>
+      <button id="mobileQuickAdd" class="mobile-fab" type="button">＋ 記一筆</button>
     </main>
   </div>
 

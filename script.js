@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v19";
+const APP_VERSION = "v20";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -68,7 +68,8 @@ const pageMeta = {
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
-  settings: ["設定", "連線狀態、資料匯出與操作提示"]
+  settings: ["設定", "連線狀態、資料匯出與操作提示"],
+  mobileMore: ["更多", "帳戶、分類、訂閱、信用卡、貸款與設定"]
 };
 
 function escapeHtml(value) {
@@ -500,7 +501,8 @@ function render() {
     creditLoans: renderCreditLoans,
     goals: renderGoals,
     reports: renderReports,
-    settings: renderSettings
+    settings: renderSettings,
+    mobileMore: renderMobileMore
   };
   app.innerHTML = (renderers[state.activeTab] || renderOverview)();
   bindRenderedEvents();
@@ -522,6 +524,21 @@ function renderOverview() {
       ${metricCard("實際支出", fmtMoney(s.actual_expense), `使用率 ${fmtNumber(s.budget_used_pct, 1)}%`, "bad")}
       ${metricCard("剩餘預算", fmtMoney(remaining), remaining >= 0 ? "仍在預算內" : "已超支", remaining >= 0 ? "good" : "bad")}
       ${metricCard("實際收入", fmtMoney(s.actual_income), `淨現金流 ${fmtMoney(s.net_cashflow)}`, Number(s.net_cashflow || 0) >= 0 ? "good" : "warn")}
+    </div>
+
+    <div class="mobile-action-grid">
+      <button type="button" data-go="transactions" class="mobile-action-card primary">
+        <strong>＋ 記一筆</strong>
+        <span>花錢、收入、退款、轉帳</span>
+      </button>
+      <button type="button" data-go="budget" class="mobile-action-card">
+        <strong>看預算</strong>
+        <span>剩多少、哪裡快爆</span>
+      </button>
+      <button type="button" data-go="reports" class="mobile-action-card">
+        <strong>看圖表</strong>
+        <span>分類支出與 T 字帳</span>
+      </button>
     </div>
 
     <div class="card">
@@ -718,8 +735,38 @@ function renderTxFilters() {
 
 function renderTxTable(rows) {
   if (!rows.length) return `<div class="empty">沒有符合條件的交易</div>`;
-  return `
-    <div class="table-wrap">
+
+  const mobileCards = `
+    <div class="mobile-card-list">
+      ${rows.map(t => `
+        <div class="mobile-data-card">
+          <div class="mobile-data-head">
+            <div>
+              <strong>${escapeHtml(t.merchant || t.category_name || "未命名交易")}</strong>
+              <span>${escapeHtml(t.transaction_date)} · ${escapeHtml(t.account_name || "")}</span>
+            </div>
+            <div class="mobile-amount ${(t.type === "income" || t.type === "refund") ? "good" : t.type === "expense" ? "bad" : ""}">
+              ${fmtMoney(t.amount)}
+            </div>
+          </div>
+          <div class="mobile-data-meta">
+            ${typeBadge(t.type)}
+            <span class="badge">${escapeHtml(t.category_name || "未分類")}</span>
+            ${t.budget_item_name ? `<span class="badge">${escapeHtml(t.budget_item_name)}</span>` : ""}
+            <span class="badge">${escapeHtml(labelOf(t.status))}</span>
+          </div>
+          ${t.note ? `<p class="mobile-note">${escapeHtml(t.note)}</p>` : ""}
+          <div class="mobile-card-actions">
+            <button class="btn small secondary" type="button" data-edit-tx="${t.id}">編輯</button>
+            <button type="button" class="btn small danger" data-delete="transactions:${t.id}">刪除</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  const tableView = `
+    <div class="table-wrap desktop-table">
       <table>
         <thead>
           <tr>
@@ -737,7 +784,7 @@ function renderTxTable(rows) {
               <td class="mono ${(t.type === "income" || t.type === "refund") ? "good" : t.type === "expense" ? "bad" : ""}">${fmtMoney(t.amount)}</td>
               <td>${escapeHtml(t.merchant || "")}</td>
               <td>${escapeHtml(t.note || "")}</td>
-              <td><span class="badge">${escapeHtml(labelOf(t.status))}</span></td>
+              <td>${escapeHtml(labelOf(t.status))}</td>
               <td class="actions">
                 <button class="btn small secondary" data-edit-tx="${t.id}">編輯</button>
                 <button type="button" class="btn small danger" data-delete="transactions:${t.id}">刪除</button>
@@ -748,7 +795,10 @@ function renderTxTable(rows) {
       </table>
     </div>
   `;
+
+  return `${mobileCards}${tableView}`;
 }
+
 
 function renderBudget() {
   const editYear = state.editing.year;
@@ -819,8 +869,38 @@ function renderBudget() {
 
 function renderBudgetItemTable(rows) {
   if (!rows.length) return `<div class="empty">尚無預算項目</div>`;
-  return `
-    <div class="table-wrap">
+
+  const mobileCards = `
+    <div class="mobile-card-list">
+      ${rows.map(i => {
+        const pct = Number(i.used_pct || 0);
+        return `
+          <div class="mobile-data-card">
+            <div class="mobile-data-head">
+              <div>
+                <strong>${escapeHtml(i.name)}</strong>
+                <span>${escapeHtml(labelOf(i.item_type))} · ${escapeHtml(i.category_name || "未分類")}</span>
+              </div>
+              <div class="mobile-amount">${fmtMoney(i.planned_amount)}</div>
+            </div>
+            <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
+            <div class="mobile-data-meta">
+              <span>實際 ${fmtMoney(i.actual_amount)}</span>
+              <span>${Number(i.remaining_amount || 0) >= 0 ? `剩餘 ${fmtMoney(i.remaining_amount)}` : `超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
+              <span>${fmtNumber(pct, 1)}%</span>
+            </div>
+            <div class="mobile-card-actions">
+              <button class="btn small secondary" type="button" data-edit-budget="${i.budget_item_id}">編輯</button>
+              <button type="button" class="btn small danger" data-delete="budget_items:${i.budget_item_id}">刪除</button>
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+
+  const tableView = `
+    <div class="table-wrap desktop-table">
       <table>
         <thead><tr><th>名稱</th><th>類型</th><th>分類</th><th>預算</th><th>實際</th><th>剩餘</th><th>使用率</th><th>操作</th></tr></thead>
         <tbody>
@@ -849,7 +929,10 @@ function renderBudgetItemTable(rows) {
       </table>
     </div>
   `;
+
+  return `${mobileCards}${tableView}`;
 }
+
 
 function renderAccounts() {
   const edit = state.editing.account;
@@ -1407,6 +1490,29 @@ function renderTAccountTable() {
           <td>${escapeHtml(r.note || "")}</td>
         </tr>`).join("")}</tbody>
     </table></div>
+  `;
+}
+
+
+function renderMobileMore() {
+  const items = [
+    { tab: "accounts", title: "帳戶", desc: "現金、銀行、電子支付、信用卡餘額" },
+    { tab: "categories", title: "分類 / 標籤", desc: "調整分類、顏色與標籤" },
+    { tab: "recurring", title: "訂閱管理", desc: "固定扣款、下次扣款日與取消狀態" },
+    { tab: "creditLoans", title: "信用卡 / 貸款", desc: "信用卡總帳、貸款與債務" },
+    { tab: "goals", title: "目標", desc: "儲蓄、旅遊、還債與大額購買" },
+    { tab: "settings", title: "設定", desc: "匯出資料、連線狀態與提醒" }
+  ];
+
+  return `
+    <div class="mobile-more-grid">
+      ${items.map(item => `
+        <button class="mobile-more-card" type="button" data-go="${item.tab}">
+          <strong>${escapeHtml(item.title)}</strong>
+          <span>${escapeHtml(item.desc)}</span>
+        </button>
+      `).join("")}
+    </div>
   `;
 }
 
@@ -2364,7 +2470,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v19 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v20 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
@@ -2481,6 +2587,8 @@ async function init() {
     await loadAll();
     render();
   });
+
+  $("#mobileQuickAdd")?.addEventListener("click", () => setPage("transactions"));
   $("#exportBtn").addEventListener("click", exportCurrentYearCsv);
   $("#yearSelect").addEventListener("change", e => {
     state.selectedYearId = e.target.value;
