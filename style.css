@@ -1445,3 +1445,11 @@ td.actions { width: 126px; }
 .builtin-template-list .mobile-card-actions {
   display: none;
 }
+
+
+/* v26: editable-only templates */
+.compact-empty {
+  padding: 10px;
+  border-radius: 14px;
+  font-size: 13px;
+}
