@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v29";
+const APP_VERSION = "v31";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -1546,12 +1546,12 @@ function renderReports() {
       <div class="card chart-card">
         <div class="card-title-row"><h3>儲蓄率</h3><span class="badge">每月</span></div>
         <div class="chart-canvas-wrap"><canvas id="reportsSavingsRateChart"></canvas></div>
-        <p class="chart-note">公式：(收入 − 淨支出) / 收入。轉帳不計入收入或支出。</p>
+        <p class="chart-note">公式：(收入 − 淨支出) / 收入。只顯示記帳開始後的月份；轉帳不計入收入或支出。</p>
       </div>
       <div class="card chart-card">
         <div class="card-title-row"><h3>帳面淨資產</h3><span class="badge">帳戶餘額</span></div>
         <div class="chart-canvas-wrap"><canvas id="reportsNetWorthChart"></canvas></div>
-        <p class="chart-note">依帳戶期初餘額 + 累積收支估算；不等於股票即時市值。</p>
+        <p class="chart-note">依帳戶期初餘額 + 累積收支估算；只顯示記帳開始後的月份，不等於股票即時市值。</p>
       </div>
     </div>
 
@@ -1643,39 +1643,43 @@ function getHealthRows() {
 }
 
 function getHealthTrendRows() {
-  const rows = Array.from({ length: 12 }, (_, i) => ({
-    label: `${i + 1}月`,
+  const rows = activeMonthBuckets(month => ({
+    label: `${month}月`,
+    month,
     survival: 0,
     quality: 0,
     luxury: 0,
     investment: 0,
     other: 0
   }));
+  const map = new Map(rows.map(r => [r.month, r]));
   expenseRowsForSelectedYear().forEach(t => {
     const month = Number(t.tx_month || 0);
-    if (!month || month < 1 || month > 12) return;
+    const row = map.get(month);
+    if (!row) return;
     const key = ["survival", "quality", "luxury", "investment"].includes(t.necessity_level) ? t.necessity_level : "other";
-    rows[month - 1][key] += t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
+    row[key] += t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
   });
   return rows;
 }
 
 function getMonthlyAnalyticsRows() {
-  const rows = Array.from({ length: 12 }, (_, i) => ({
-    label: `${i + 1}月`,
-    month: i + 1,
+  const rows = activeMonthBuckets(month => ({
+    label: `${month}月`,
+    month,
     income: 0,
     expense: 0,
     saving: 0,
     savingsRate: null
   }));
 
+  const map = new Map(rows.map(r => [r.month, r]));
   transactionsForSelectedYear()
     .filter(t => t.status !== "cancelled")
     .forEach(t => {
       const month = Number(t.tx_month || 0);
-      if (!month || month < 1 || month > 12) return;
-      const row = rows[month - 1];
+      const row = map.get(month);
+      if (!row) return;
       if (t.type === "income") row.income += Number(t.amount || 0);
       if (t.type === "expense") row.expense += Number(t.amount || 0);
       if (t.type === "refund") row.expense -= Number(t.amount || 0);
@@ -1704,16 +1708,17 @@ function getNetWorthRows() {
   });
 
   let cumulative = cumulativeBeforeYear;
-  return Array.from({ length: 12 }, (_, i) => {
-    const month = i + 1;
+  const monthRows = activeMonthBuckets(month => ({ label: `${month}月`, month, netWorth: null }));
+
+  return monthRows.map(row => {
     allTx
-      .filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear) && Number(t.tx_month) === month)
+      .filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear) && Number(t.tx_month) === row.month)
       .forEach(t => {
         if (t.type === "income") cumulative += Number(t.amount || 0);
         if (t.type === "expense") cumulative -= Number(t.amount || 0);
         if (t.type === "refund") cumulative += Number(t.amount || 0);
       });
-    return { label: `${month}月`, netWorth: initial + cumulative };
+    return { ...row, netWorth: initial + cumulative };
   });
 }
 
@@ -2119,9 +2124,10 @@ function renderSettings() {
       </div>
       <div class="card">
         <h3>資料匯出</h3>
-        <p class="metric-sub">匯出 Excel 可正常顯示中文的 CSV，或下載畫面目前暫存的資料備份。</p>
+        <p class="metric-sub">可匯出「流水帳明細」或「現金流量表格式」的 Excel CSV。現金流量表適合貼到 Excel 做月報 / 年報。</p>
         <div class="btn-row">
-          <button class="btn secondary" id="exportCsvBtn">匯出 Excel CSV</button>
+          <button class="btn secondary" id="exportCsvBtn">匯出流水帳 CSV</button>
+          <button class="btn secondary" id="exportCashflowCsvBtn">匯出現金流量表 CSV</button>
           <button class="btn secondary" id="downloadJsonBtn">下載暫存資料</button>
         </div>
       </div>
@@ -2305,11 +2311,12 @@ function getTrendRows() {
     return buckets;
   }
 
-  const buckets = Array.from({ length: 12 }, (_, i) => ({ label: `${i + 1}月`, income: 0, expense: 0, net: 0 }));
+  const buckets = activeMonthBuckets(month => ({ label: `${month}月`, month, income: 0, expense: 0, net: 0 }));
+  const map = new Map(buckets.map(b => [b.month, b]));
   rows.forEach(t => {
     const month = Number(t.tx_month || 0);
-    if (!month || month < 1 || month > 12) return;
-    const bucket = buckets[month - 1];
+    const bucket = map.get(month);
+    if (!bucket) return;
     if (t.type === "income") bucket.income += Number(t.amount || 0);
     if (t.type === "expense") bucket.expense += Number(t.amount || 0);
     if (t.type === "refund") bucket.expense -= Number(t.amount || 0);
@@ -2858,7 +2865,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v29 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v31 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -2894,7 +2901,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v29 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v31 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3288,7 +3295,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v29 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v31 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
@@ -3311,6 +3318,7 @@ function bindRenderedEvents() {
   });
 
   $("#exportCsvBtn")?.addEventListener("click", exportCurrentYearCsv);
+  $("#exportCashflowCsvBtn")?.addEventListener("click", exportCashflowStatementCsv);
   $("#downloadJsonBtn")?.addEventListener("click", downloadCacheJson);
 }
 
@@ -3437,7 +3445,102 @@ function exportCurrentYearCsv() {
     { key: "updated_at", label: "更新時間" }
   ];
   downloadFile(`流水帳_${state.selectedBudgetYear}_Excel_UTF8.csv`, toCsv(rows, headers), "text/csv;charset=utf-8", { bom: true });
-  showAlert("已匯出 Excel 可讀 CSV。若 Excel 跳出格式提醒，選「另存新檔」即可；中文亂碼問題已用 UTF-8 BOM 修正。", "good");
+  showAlert("已匯出流水帳 CSV。中文亂碼已用 UTF-8 BOM 修正。", "good");
+}
+
+function addAmount(map, key, amount) {
+  const safeKey = key || "未分類";
+  map.set(safeKey, Number(map.get(safeKey) || 0) + Number(amount || 0));
+}
+
+function mapToSortedRows(map) {
+  return Array.from(map.entries())
+    .map(([name, amount]) => ({ name, amount: Number(amount || 0) }))
+    .filter(r => Math.abs(r.amount) > 0)
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+}
+
+function cashflowStatementRows() {
+  const rows = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
+  const incomeByCategory = new Map();
+  const expenseByCategory = new Map();
+  const transferByPurpose = new Map();
+
+  rows.forEach(t => {
+    const amount = Number(t.amount || 0);
+    if (t.type === "income") {
+      addAmount(incomeByCategory, t.category_name || "收入", amount);
+    } else if (t.type === "expense") {
+      addAmount(expenseByCategory, t.category_name || "未分類支出", amount);
+    } else if (t.type === "refund") {
+      // 退款抵減原支出，放在支出端用負數呈現。
+      addAmount(expenseByCategory, t.category_name || "退款", -amount);
+    } else if (t.type === "transfer") {
+      const purpose = t.merchant || `${t.account_name || "轉出帳戶"} → ${t.to_account_name || "轉入帳戶"}`;
+      addAmount(transferByPurpose, purpose, amount);
+    }
+  });
+
+  const incomeRows = mapToSortedRows(incomeByCategory);
+  const expenseRows = mapToSortedRows(expenseByCategory);
+  const transferRows = mapToSortedRows(transferByPurpose);
+
+  const totalIncome = incomeRows.reduce((sum, r) => sum + r.amount, 0);
+  const netExpense = expenseRows.reduce((sum, r) => sum + r.amount, 0);
+  const netCashflow = totalIncome - netExpense;
+  const savingsRate = totalIncome > 0 ? netCashflow / totalIncome : null;
+  const totalTransfers = transferRows.reduce((sum, r) => sum + r.amount, 0);
+
+  const out = [];
+  const push = (section, item, amount = "", note = "", ratio = "") => {
+    out.push({ section, item, amount, ratio, note });
+  };
+  const blank = () => push("", "", "", "", "");
+
+  push("個人現金流量表", `${state.selectedBudgetYear} 年度`, "", "", "");
+  push("產生時間", new Date().toLocaleString("zh-TW"), "", "", "");
+  push("口徑說明", "收入與支出採直接法；轉帳只列備查，不影響收入、支出、儲蓄率。", "", "", "");
+  blank();
+
+  push("一、現金流入", "收入合計", totalIncome, "", totalIncome ? "100%" : "");
+  incomeRows.forEach(r => push("收入明細", r.name, r.amount, "", totalIncome ? `${fmtNumber(r.amount / totalIncome * 100, 1)}%` : ""));
+  blank();
+
+  push("二、生活現金流出", "淨支出合計（支出 − 退款）", -netExpense, "現金流出以負數呈現", totalIncome ? `${fmtNumber(netExpense / totalIncome * 100, 1)}% of income` : "");
+  expenseRows.forEach(r => {
+    const amount = -r.amount;
+    const note = r.amount < 0 ? "退款淨流入" : "";
+    push("支出明細", r.name, amount, note, totalIncome ? `${fmtNumber(r.amount / totalIncome * 100, 1)}% of income` : "");
+  });
+  blank();
+
+  push("三、自由現金流", "收入 − 淨支出", netCashflow, "", totalIncome ? `${fmtNumber(savingsRate * 100, 1)}%` : "N/A");
+  push("三、自由現金流", "儲蓄率", savingsRate === null ? "N/A" : `${fmtNumber(savingsRate * 100, 1)}%`, "(收入 − 淨支出) / 收入", "");
+  blank();
+
+  push("四、轉帳 / 資金配置（備查）", "轉帳總額", totalTransfers, "銀行、信用卡、證券戶、電子支付之間的資金移動；不列入損益。", "");
+  transferRows.forEach(r => push("轉帳明細", r.name, r.amount, "備查，不影響淨現金流", ""));
+  blank();
+
+  const current = getCurrentYearSummary();
+  push("五、預算摘要", "年度可用預算", Number(current.available_budget || 0), "", "");
+  push("五、預算摘要", "年度已用預算", -Number(current.actual_expense || 0), "", "");
+  push("五、預算摘要", "年度剩餘預算", Number(current.remaining_budget || 0), "", "");
+  push("五、預算摘要", "預算使用率", `${fmtNumber(current.budget_used_pct || 0, 1)}%`, "", "");
+  return out;
+}
+
+function exportCashflowStatementCsv() {
+  const rows = cashflowStatementRows();
+  const headers = [
+    { key: "section", label: "區塊" },
+    { key: "item", label: "項目" },
+    { key: "amount", label: "金額" },
+    { key: "ratio", label: "比例" },
+    { key: "note", label: "備註" }
+  ];
+  downloadFile(`現金流量表_${state.selectedBudgetYear}_Excel_UTF8.csv`, toCsv(rows, headers), "text/csv;charset=utf-8", { bom: true });
+  showAlert("已匯出現金流量表 CSV。支出以負數呈現，轉帳只列備查，不影響儲蓄率。", "good");
 }
 
 function downloadCacheJson() {
