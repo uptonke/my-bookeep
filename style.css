@@ -1514,3 +1514,12 @@ td.actions { width: 126px; }
     font-size: 11px;
   }
 }
+
+
+/* v35：提撥型預算 */
+@media (min-width: 761px) {
+  .desktop-table td .muted {
+    margin-top: 4px;
+    font-size: 12px;
+  }
+}

@@ -131,6 +131,11 @@ const labelMaps = {
   yearly: "每年",
   custom: "自訂",
 
+  annual_total: "年度總額",
+  monthly_contribution: "月提撥",
+  record_start: "記帳開始月",
+  calendar_year: "1 月開始",
+
   none: "無",
   carryover: "餘額結轉",
   overspend_to_next: "超支帶入下期",
@@ -358,6 +363,37 @@ function transactionsForSelectedYear() {
   return allTransactionsEnriched().filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear));
 }
 
+
+function selectedYearFirstTransactionMonth() {
+  const months = transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled")
+    .map(t => Number(t.tx_month || 0))
+    .filter(m => m >= 1 && m <= 12);
+  return months.length ? Math.min(...months) : null;
+}
+
+function yearBudgetContributionCount(year = {}) {
+  const budgetYear = Number(year.budget_year || state.selectedBudgetYear);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  if ((year.budget_mode || "annual_total") !== "monthly_contribution") return 1;
+  if (budgetYear > currentYear) return 0;
+
+  const startMonth = selectedYearFirstTransactionMonth() || (budgetYear === currentYear ? currentMonth : 1);
+  const endMonth = budgetYear === currentYear ? currentMonth : 12;
+
+  return Math.max(0, endMonth - startMonth + 1);
+}
+
+function yearBudgetModeLabel(summary) {
+  if ((summary?.budget_mode || "annual_total") === "monthly_contribution") {
+    return `月提撥 ${fmtMoney(summary.monthly_budget)} × ${summary.contribution_count} 次｜起點：記帳開始月`;
+  }
+  return "年度總額一次配置";
+}
+
 function getCurrentYearSummary() {
   const year = state.data.years.find(y => y.id === state.selectedYearId)
     || state.data.years.find(y => Number(y.budget_year) === Number(state.selectedBudgetYear))
@@ -367,15 +403,30 @@ function getCurrentYearSummary() {
   const gross_expense = txRows.reduce((sum, t) => sum + (t.type === "expense" ? Number(t.amount || 0) : 0), 0);
   const refund = txRows.reduce((sum, t) => sum + (t.type === "refund" ? Number(t.amount || 0) : 0), 0);
   const actual_expense = gross_expense - refund;
-  const annual_budget = Number(year.annual_budget || 0);
+
+  const budget_mode = year.budget_mode || "annual_total";
+  const monthly_budget = Number(year.monthly_budget || 0);
+  const contribution_count = yearBudgetContributionCount(year);
+  const annual_budget = budget_mode === "monthly_contribution"
+    ? monthly_budget * 12
+    : Number(year.annual_budget || 0);
+  const current_period_budget = budget_mode === "monthly_contribution"
+    ? monthly_budget * contribution_count
+    : annual_budget;
+
   const carryover_from_previous = Number(year.carryover_from_previous || 0);
-  const available_budget = annual_budget + carryover_from_previous;
+  const available_budget = current_period_budget + carryover_from_previous;
   const remaining_budget = available_budget - actual_expense;
+
   return {
     year_id: year.id,
     budget_year: year.budget_year || state.selectedBudgetYear,
     name: year.name || `${state.selectedBudgetYear} 年度預算`,
+    budget_mode,
+    monthly_budget,
+    contribution_count,
     annual_budget,
+    current_period_budget,
     carryover_from_previous,
     available_budget,
     actual_income,
@@ -386,6 +437,58 @@ function getCurrentYearSummary() {
     is_closed: year.is_closed,
     note: year.note
   };
+}
+
+function budgetIsContributionMode(item) {
+  return item?.rollover_mode === "carryover" && ["monthly", "weekly"].includes(item?.period_type);
+}
+
+function budgetContributionCount(item) {
+  const year = Number(state.selectedBudgetYear);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  if (!budgetIsContributionMode(item)) return 1;
+
+  if (item.period_type === "monthly") {
+    if (year < currentYear) return 12;
+    if (year > currentYear) return 0;
+    return currentMonth;
+  }
+
+  if (item.period_type === "weekly") {
+    if (year < currentYear) return 52;
+    if (year > currentYear) return 0;
+
+    const start = new Date(year, 0, 1);
+    const diffDays = Math.floor((now - start) / 86400000) + 1;
+    return Math.max(1, Math.ceil(diffDays / 7));
+  }
+
+  return 1;
+}
+
+function budgetCurrentAvailableAmount(item) {
+  const base = Number(item?.planned_amount || 0);
+  const count = budgetContributionCount(item);
+  if (budgetIsContributionMode(item)) return base * count;
+  return base;
+}
+
+function budgetFundingLabel(item) {
+  if (budgetIsContributionMode(item)) {
+    return `${labelOf(item.period_type)}提撥 ${fmtMoney(item.planned_amount)} × ${budgetContributionCount(item)} 次`;
+  }
+  if (item?.period_type && item.period_type !== "annual") {
+    return `${labelOf(item.period_type)} ${fmtMoney(item.planned_amount)}`;
+  }
+  return `固定預算 ${fmtMoney(item?.planned_amount || 0)}`;
+}
+
+function budgetAvailableLabel(item) {
+  if (budgetIsContributionMode(item)) return `目前可用 ${fmtMoney(item.current_budget_amount || 0)}`;
+  return `預算 ${fmtMoney(item.current_budget_amount || item.planned_amount || 0)}`;
 }
 
 function budgetItemSummariesForSelectedYear() {
@@ -401,15 +504,24 @@ function budgetItemSummariesForSelectedYear() {
         return sum;
       }, 0);
       const planned_amount = Number(i.planned_amount || 0);
+      const contribution_count = budgetContributionCount(i);
+      const is_contribution_mode = budgetIsContributionMode(i);
+      const current_budget_amount = budgetCurrentAvailableAmount(i);
       return {
         ...i,
         budget_item_id: i.id,
         budget_year: state.selectedBudgetYear,
         category_name: category.name || "",
         category_type: category.type || "",
+        planned_amount,
+        contribution_count,
+        is_contribution_mode,
+        current_budget_amount,
+        funding_label: budgetFundingLabel({ ...i, planned_amount }),
+        available_label: budgetAvailableLabel({ ...i, planned_amount, current_budget_amount }),
         actual_amount,
-        remaining_amount: planned_amount - actual_amount,
-        used_pct: planned_amount ? Math.round(actual_amount / planned_amount * 10000) / 100 : 0
+        remaining_amount: current_budget_amount - actual_amount,
+        used_pct: current_budget_amount ? Math.round(actual_amount / current_budget_amount * 10000) / 100 : 0
       };
     })
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name)));
@@ -1057,10 +1169,11 @@ function renderBudget() {
   const showEditor = Boolean(editYear || editItem || !items.length);
 
   return `
-    <div class="grid cols-3">
-      ${metricCard("年度預算", fmtMoney(current.annual_budget), `結轉 ${fmtMoney(current.carryover_from_previous)}`)}
+    <div class="grid cols-4">
+      ${metricCard("目前可用預算", fmtMoney(current.available_budget), yearBudgetModeLabel(current))}
+      ${metricCard("年度總預算", fmtMoney(current.annual_budget), current.budget_mode === "monthly_contribution" ? "每月預算 × 12" : "年度總額")}
       ${metricCard("已用預算", fmtMoney(current.actual_expense), `${fmtNumber(current.budget_used_pct, 1)}%`, "bad")}
-      ${metricCard("剩餘預算", fmtMoney(current.remaining_budget), Number(current.remaining_budget || 0) >= 0 ? "預算內" : "超支", Number(current.remaining_budget || 0) >= 0 ? "good" : "bad")}
+      ${metricCard("剩餘可用預算", fmtMoney(current.remaining_budget), Number(current.remaining_budget || 0) >= 0 ? "預算內" : "超支", Number(current.remaining_budget || 0) >= 0 ? "good" : "bad")}
     </div>
 
     <div class="card budget-focus-card">
@@ -1068,7 +1181,7 @@ function renderBudget() {
         <h3>預算項目</h3>
         <span class="badge">${items.length} 項</span>
       </div>
-      <p class="metric-sub">先看每個項目的「預算 / 實際 / 剩餘 / 使用率」。需要新增或調整時，再展開下方管理區。</p>
+      <p class="metric-sub">先看每個項目的「目前可用 / 實際 / 剩餘 / 使用率」。若期間選每月或每週、結轉模式選餘額結轉，會改用「每次提撥 × 已提撥次數 − 已花費」計算。</p>
       ${renderBudgetItemTable(items)}
     </div>
 
@@ -1082,7 +1195,14 @@ function renderBudget() {
             <input type="hidden" name="id" value="${escapeHtml(editYear?.id || "")}">
             ${field("年度", `<input class="input" type="number" name="budget_year" min="2000" max="2100" value="${escapeHtml(editYear?.budget_year || state.selectedBudgetYear)}" required>`)}
             ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editYear?.name || "")}" placeholder="例：2026 年度預算">`)}
-            ${field("年度預算", `<input class="input" type="number" step="1" name="annual_budget" value="${escapeHtml(editYear?.annual_budget ?? current.annual_budget ?? 0)}">`)}
+            ${field("預算模式", `<select class="input" name="budget_mode">
+              ${selectOpts(["annual_total","monthly_contribution"], editYear?.budget_mode || current.budget_mode || "annual_total")}
+            </select>`)}
+            ${field("年度總預算", `<input class="input" type="number" step="1" name="annual_budget" value="${escapeHtml(editYear?.annual_budget ?? current.annual_budget ?? 0)}" placeholder="年度總額模式使用">`)}
+            ${field("每月預算", `<input class="input" type="number" step="1" name="monthly_budget" value="${escapeHtml(editYear?.monthly_budget ?? current.monthly_budget ?? 0)}" placeholder="月提撥模式使用">`)}
+            ${field("計算起點", `<select class="input" name="budget_start_mode">
+              <option value="record_start" selected>記帳開始月（模式 B）</option>
+            </select>`)}
             ${field("前期結轉", `<input class="input" type="number" step="1" name="carryover_from_previous" value="${escapeHtml(editYear?.carryover_from_previous ?? current.carryover_from_previous ?? 0)}">`)}
             <div class="field wide">
               <label>備註</label>
@@ -1103,7 +1223,7 @@ function renderBudget() {
             <input type="hidden" name="id" value="${escapeHtml(editItem?.id || "")}">
             ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editItem?.name || "")}" required placeholder="例：日常餐飲">`)}
             ${field("類型", `<select class="input" name="item_type">${selectOpts(["expense","income","saving","other"], editItem?.item_type || "expense")}</select>`)}
-            ${field("金額", `<input class="input" type="number" step="1" name="planned_amount" value="${escapeHtml(editItem?.planned_amount || "")}" required>`)}
+            ${field("金額", `<input class="input" type="number" step="1" name="planned_amount" value="${escapeHtml(editItem?.planned_amount || "")}" required placeholder="固定預算，或每次提撥金額">`)}
             ${field("分類", `<select class="input" name="category_id">${categoryOptions(editItem?.item_type || "expense", editItem?.category_id || "")}</select>`)}
             <details class="advanced-fields wide">
               <summary>進階欄位</summary>
@@ -1146,10 +1266,12 @@ function renderBudgetItemTable(rows) {
                 <strong>${escapeHtml(i.name)}</strong>
                 <span>${escapeHtml(labelOf(i.item_type))} · ${escapeHtml(i.category_name || "未分類")}</span>
               </div>
-              <div class="mobile-amount">${fmtMoney(i.planned_amount)}</div>
+              <div class="mobile-amount">${fmtMoney(i.current_budget_amount)}</div>
             </div>
             <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
             <div class="mobile-data-meta">
+              <span>${escapeHtml(i.is_contribution_mode ? "提撥型" : "固定型")}</span>
+              <span>${escapeHtml(i.funding_label)}</span>
               <span>實際 ${fmtMoney(i.actual_amount)}</span>
               <span>${Number(i.remaining_amount || 0) >= 0 ? `剩餘 ${fmtMoney(i.remaining_amount)}` : `超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
               <span>${fmtNumber(pct, 1)}%</span>
@@ -1167,7 +1289,7 @@ function renderBudgetItemTable(rows) {
   const tableView = `
     <div class="table-wrap desktop-table">
       <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>分類</th><th>預算</th><th>實際</th><th>剩餘</th><th>使用率</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>類型</th><th>分類</th><th>計算方式</th><th>目前可用</th><th>實際</th><th>剩餘</th><th>使用率</th><th>操作</th></tr></thead>
         <tbody>
           ${rows.map(i => {
             const pct = Number(i.used_pct || 0);
@@ -1176,7 +1298,11 @@ function renderBudgetItemTable(rows) {
                 <td>${escapeHtml(i.name)}</td>
                 <td><span class="badge">${escapeHtml(labelOf(i.item_type))}</span></td>
                 <td>${escapeHtml(i.category_name || "")}</td>
-                <td class="mono">${fmtMoney(i.planned_amount)}</td>
+                <td>
+                  <span class="badge">${escapeHtml(i.is_contribution_mode ? "提撥型" : "固定型")}</span>
+                  <div class="muted">${escapeHtml(i.funding_label)}</div>
+                </td>
+                <td class="mono">${fmtMoney(i.current_budget_amount)}</td>
                 <td class="mono bad">${fmtMoney(i.actual_amount)}</td>
                 <td class="mono ${Number(i.remaining_amount || 0) >= 0 ? "good" : "bad"}">${fmtMoney(i.remaining_amount)}</td>
                 <td>
@@ -1197,7 +1323,6 @@ function renderBudgetItemTable(rows) {
 
   return `${mobileCards}${tableView}`;
 }
-
 
 function renderAccounts() {
   const edit = state.editing.account;
@@ -2412,18 +2537,18 @@ function getTrendRows() {
 
 function getBudgetCompareRows(limit = 8) {
   let rows = budgetItemSummariesForSelectedYear()
-    .filter(r => Number(r.planned_amount || 0) > 0);
+    .filter(r => Number(r.current_budget_amount || r.planned_amount || 0) > 0);
 
   if (state.filters.chartCategory) {
     rows = rows.filter(r => r.category_id === state.filters.chartCategory);
   }
 
   return rows
-    .sort((a, b) => Number(b.planned_amount || 0) - Number(a.planned_amount || 0))
+    .sort((a, b) => Number(b.current_budget_amount || 0) - Number(a.current_budget_amount || 0))
     .slice(0, limit)
     .map(r => ({
       name: r.name,
-      planned: Number(r.planned_amount || 0),
+      planned: Number(r.current_budget_amount || 0),
       actual: Number(r.actual_amount || 0),
       remaining: Number(r.remaining_amount || 0)
     }));
@@ -3031,11 +3156,20 @@ async function saveTransaction(form) {
 
 async function saveYear(form) {
   const d = readForm(form);
+  const budgetMode = d.budget_mode || "annual_total";
+  const monthlyBudget = numberOrZero(d.monthly_budget);
+  const annualBudget = budgetMode === "monthly_contribution"
+    ? monthlyBudget * 12
+    : numberOrZero(d.annual_budget);
+
   const payload = {
     id: d.id || undefined,
     budget_year: Number(d.budget_year),
     name: d.name || `${d.budget_year} 年度預算`,
-    annual_budget: numberOrZero(d.annual_budget),
+    budget_mode: budgetMode,
+    monthly_budget: monthlyBudget,
+    budget_start_mode: "record_start",
+    annual_budget: annualBudget,
     carryover_from_previous: numberOrZero(d.carryover_from_previous),
     note: d.note
   };
