@@ -1375,3 +1375,63 @@ td.actions { width: 126px; }
     font-size: 18px;
   }
 }
+
+
+/* =========================================================
+   v24 自訂快速模板
+   ========================================================= */
+.always-card-list {
+  display: grid;
+}
+
+@media (min-width: 761px) {
+  .always-card-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .always-card-list .mobile-data-card {
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: rgba(255,255,255,.065);
+    padding: 14px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .always-card-list .mobile-data-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .always-card-list .mobile-data-head strong {
+    display: block;
+    font-size: 15px;
+  }
+
+  .always-card-list .mobile-data-head span {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 3px;
+  }
+
+  .always-card-list .mobile-data-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .always-card-list .mobile-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .quick-template-title span {
+    line-height: 1.45;
+  }
+}

@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v23";
+const APP_VERSION = "v24";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -28,6 +28,7 @@ const state = {
     categorySpending: [],
     monthlyCashflow: [],
     recurring: [],
+    quickTemplates: [],
     creditCards: [],
     creditStatements: [],
     loans: [],
@@ -40,6 +41,7 @@ const state = {
     category: null,
     tag: null,
     recurring: null,
+    quickTemplate: null,
     creditCard: null,
     loan: null,
     goal: null,
@@ -68,8 +70,9 @@ const pageMeta = {
   creditLoans: ["信用卡 / 貸款", "信用卡帳單與債務追蹤"],
   goals: ["目標", "儲蓄、還債、旅遊與大額購買目標"],
   reports: ["報表", "月現金流、分類支出、借貸帳與表格匯出"],
+  templates: ["模板管理", "自訂快速記一筆模板"],
   settings: ["設定", "連線狀態、資料匯出與操作提示"],
-  mobileMore: ["更多", "帳戶、分類、訂閱、信用卡、貸款與設定"]
+  mobileMore: ["更多", "帳戶、分類、訂閱、模板與設定"]
 };
 
 function escapeHtml(value) {
@@ -168,6 +171,7 @@ const tableLabelMap = {
   budget_items: "預算項目",
   transactions: "交易",
   recurring_transactions: "訂閱",
+  quick_templates: "快速模板",
   credit_cards: "信用卡",
   loans: "貸款",
   goals: "目標"
@@ -418,6 +422,7 @@ async function loadAll() {
     categorySpending: queryTable("v_category_spending"),
     monthlyCashflow: queryTable("v_monthly_cashflow"),
     recurring: queryTable("recurring_transactions", { order: { column: "next_due_date", ascending: true } }),
+    quickTemplates: queryTable("quick_templates", { order: { column: "sort_order", ascending: true } }),
     creditCards: queryTable("credit_cards", { order: { column: "card_name", ascending: true } }),
     creditStatements: queryTable("credit_card_statements", { order: { column: "due_date", ascending: false } }),
     loans: queryTable("loans", { order: { column: "created_at", ascending: false } }),
@@ -498,6 +503,7 @@ function render() {
     accounts: renderAccounts,
     categories: renderCategories,
     recurring: renderRecurring,
+    templates: renderTemplates,
     creditLoans: renderCreditLoans,
     goals: renderGoals,
     reports: renderReports,
@@ -644,27 +650,36 @@ function renderSmallTxTable(rows) {
 }
 
 
-const quickTxTemplates = [
-  { key: "breakfast", label: "早餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "早餐", cashflow: "variable", necessity: "quality", accountTypes: ["credit_card", "cash", "e_wallet"] },
-  { key: "lunch", label: "午餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "午餐", cashflow: "variable", necessity: "quality", accountTypes: ["credit_card", "cash", "e_wallet"] },
-  { key: "dinner", label: "晚餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "晚餐", cashflow: "variable", necessity: "quality", accountTypes: ["credit_card", "cash", "e_wallet"] },
-  { key: "coffee", label: "咖啡", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "咖啡", cashflow: "variable", necessity: "luxury", accountTypes: ["credit_card", "cash", "e_wallet"] },
-  { key: "transport", label: "交通", type: "expense", categoryNames: ["交通"], budgetNames: ["交通"], merchant: "交通", cashflow: "variable", necessity: "survival", accountTypes: ["e_wallet", "credit_card", "cash"] },
-  { key: "movie", label: "電影", type: "expense", categoryNames: ["娛樂"], budgetNames: ["電影", "娛樂"], merchant: "電影", cashflow: "one_time", necessity: "luxury", accountTypes: ["credit_card", "cash"] },
-  { key: "liveMusic", label: "Live Music", type: "expense", categoryNames: ["娛樂"], budgetNames: ["Live Music", "娛樂"], merchant: "Live Music", cashflow: "one_time", necessity: "luxury", accountTypes: ["credit_card", "cash"] },
-  { key: "comedy", label: "單口喜劇", type: "expense", categoryNames: ["娛樂"], budgetNames: ["單口喜劇", "娛樂"], merchant: "單口喜劇", cashflow: "one_time", necessity: "luxury", accountTypes: ["credit_card", "cash"] },
-  { key: "subscription", label: "訂閱", type: "expense", categoryNames: ["訂閱"], budgetNames: ["訂閱"], merchant: "訂閱", cashflow: "fixed", necessity: "quality", accountTypes: ["credit_card", "bank"] }
+const fallbackQuickTemplates = [
+  { key: "builtin-breakfast", name: "早餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "早餐", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
+  { key: "builtin-lunch", name: "午餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "午餐", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
+  { key: "builtin-dinner", name: "晚餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "晚餐", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
+  { key: "builtin-coffee", name: "咖啡", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "咖啡", cashflow_nature: "variable", necessity_level: "luxury", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
+  { key: "builtin-transport", name: "交通", type: "expense", categoryNames: ["交通"], budgetNames: ["交通"], merchant: "交通", cashflow_nature: "variable", necessity_level: "survival", accountTypes: ["e_wallet", "credit_card", "cash"], is_builtin: true },
+  { key: "builtin-movie", name: "電影", type: "expense", categoryNames: ["娛樂"], budgetNames: ["電影", "娛樂"], merchant: "電影", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "cash"], is_builtin: true },
+  { key: "builtin-liveMusic", name: "Live Music", type: "expense", categoryNames: ["娛樂"], budgetNames: ["Live Music", "娛樂"], merchant: "Live Music", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "cash"], is_builtin: true },
+  { key: "builtin-comedy", name: "單口喜劇", type: "expense", categoryNames: ["娛樂"], budgetNames: ["單口喜劇", "娛樂"], merchant: "單口喜劇", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "cash"], is_builtin: true },
+  { key: "builtin-subscription", name: "訂閱", type: "expense", categoryNames: ["訂閱"], budgetNames: ["訂閱"], merchant: "訂閱", cashflow_nature: "fixed", necessity_level: "quality", accountTypes: ["credit_card", "bank"], is_builtin: true }
 ];
 
+function activeQuickTemplates() {
+  const rows = (state.data.quickTemplates || [])
+    .filter(t => t.is_active !== false)
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name || "").localeCompare(String(b.name || "")));
+
+  return rows.length ? rows.map(t => ({ ...t, key: `custom-${t.id}`, is_builtin: false })) : fallbackQuickTemplates;
+}
+
 function renderQuickTxTemplates() {
+  const templates = activeQuickTemplates();
   return `
     <div class="quick-template-panel">
       <div class="quick-template-title">
         <strong>快速模板</strong>
-        <span>先選模板，再輸入金額</span>
+        <span>${state.data.quickTemplates?.length ? "自訂模板" : "預設模板；可到「更多 → 模板管理」自訂"}</span>
       </div>
       <div class="quick-template-grid">
-        ${quickTxTemplates.map(t => `<button type="button" class="quick-template-btn" data-tx-template="${escapeHtml(t.key)}">${escapeHtml(t.label)}</button>`).join("")}
+        ${templates.map(t => `<button type="button" class="quick-template-btn" data-tx-template="${escapeHtml(t.key)}">${escapeHtml(t.name || t.label || "模板")}</button>`).join("")}
       </div>
     </div>
   `;
@@ -698,29 +713,42 @@ function setSelectValue(select, value) {
 }
 
 function applyQuickTxTemplate(key) {
-  const template = quickTxTemplates.find(t => t.key === key);
+  const template = activeQuickTemplates().find(t => t.key === key);
   const form = $("#txForm");
   if (!template || !form) return;
 
-  const category = findCategoryByNames(template.categoryNames);
-  const budgetItem = findBudgetItemByNames(template.budgetNames);
-  const account = findAccountByTypes(template.accountTypes);
+  const category = template.category_id
+    ? state.data.categories.find(c => c.id === template.category_id)
+    : findCategoryByNames(template.categoryNames || []);
+  const budgetItem = template.budget_item_id
+    ? budgetItemSummariesForSelectedYear().find(i => i.budget_item_id === template.budget_item_id || i.id === template.budget_item_id)
+    : findBudgetItemByNames(template.budgetNames || []);
+  const account = template.account_id
+    ? state.data.accounts.find(a => a.id === template.account_id)
+    : findAccountByTypes(template.accountTypes || []);
+  const toAccount = template.to_account_id
+    ? state.data.accounts.find(a => a.id === template.to_account_id)
+    : null;
 
-  setSelectValue(form.elements.type, template.type);
-  state.draftTxType = template.type;
+  const type = template.type || "expense";
+  setSelectValue(form.elements.type, type);
+  state.draftTxType = type;
   setSelectValue(form.elements.account_id, form.elements.account_id.value || account?.id || "");
+  setSelectValue(form.elements.to_account_id, toAccount?.id || "");
   setSelectValue(form.elements.category_id, category?.id || "");
   setSelectValue(form.elements.budget_item_id, budgetItem?.budget_item_id || budgetItem?.id || "");
-  setSelectValue(form.elements.necessity_level, template.necessity || "other");
-  setSelectValue(form.elements.cashflow_nature, template.cashflow || "variable");
+  setSelectValue(form.elements.necessity_level, template.necessity_level || template.necessity || "other");
+  setSelectValue(form.elements.cashflow_nature, template.cashflow_nature || template.cashflow || "variable");
   setSelectValue(form.elements.status, "cleared");
 
-  if (!form.elements.merchant.value) form.elements.merchant.value = template.merchant || "";
-  if (!form.elements.payment_method.value) form.elements.payment_method.value = account?.type === "credit_card" ? "信用卡" : labelOf(account?.type || "");
+  if (!form.elements.merchant.value) form.elements.merchant.value = template.merchant || template.name || template.label || "";
+  if (!form.elements.payment_method.value) form.elements.payment_method.value = template.payment_method || (account?.type === "credit_card" ? "信用卡" : labelOf(account?.type || ""));
+  if (!form.elements.note.value && template.note) form.elements.note.value = template.note;
 
   form.elements.amount?.focus();
   form.elements.amount?.select?.();
 }
+
 
 function renderTransactions() {
   const edit = state.editing.transaction;
@@ -1887,11 +1915,103 @@ function renderTAccountTable() {
 }
 
 
+
+function renderTemplates() {
+  const edit = state.editing.quickTemplate;
+  const rows = (state.data.quickTemplates || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name || "").localeCompare(String(b.name || "")));
+
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>${edit ? "編輯快速模板" : "新增快速模板"}</h3>
+        <span class="badge">v24</span>
+      </div>
+      <p class="metric-sub">模板會出現在「記一筆」頁上方。點模板後會自動帶入分類、預算項目、必要程度與現金流性質，你只要輸入金額。</p>
+      <form id="quickTemplateForm" class="form-grid">
+        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+        ${field("模板名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Blue Note、午餐、打工薪水">`)}
+        ${field("類型", `<select class="input" name="type">${selectOpts(["expense","income","refund","transfer"], edit?.type || "expense")}</select>`)}
+        ${field("預設帳戶", `<select class="input" name="account_id">${accountOptions(edit?.account_id || "")}</select>`)}
+        ${field("預設轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`)}
+        ${field("預設分類", `<select class="input" name="category_id">${categoryOptions(edit?.type || "expense", edit?.category_id || "")}</select>`)}
+        ${field("預設預算項目", `<select class="input" name="budget_item_id">${budgetItemOptions(edit?.budget_item_id || "")}</select>`)}
+        ${field("商家 / 對象", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="例：Blue Note Taipei">`)}
+        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="例：信用卡、現金">`)}
+        ${field("必要程度", `<select class="input" name="necessity_level">${selectOpts(["survival","quality","luxury","investment","other"], edit?.necessity_level || "other")}</select>`)}
+        ${field("現金流性質", `<select class="input" name="cashflow_nature">${selectOpts(["fixed","variable","one_time"], edit?.cashflow_nature || "variable")}</select>`)}
+        ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(edit?.sort_order || 0)}">`)}
+        ${field("啟用", `<select class="input" name="is_active">
+          <option value="true" ${edit?.is_active !== false ? "selected" : ""}>啟用</option>
+          <option value="false" ${edit?.is_active === false ? "selected" : ""}>停用</option>
+        </select>`)}
+        <div class="field wide">
+          <label>備註</label>
+          <textarea class="input" name="note" placeholder="模板備註，不一定會顯示在流水帳">${escapeHtml(edit?.note || "")}</textarea>
+        </div>
+        <div class="wide btn-row">
+          <button class="btn" type="submit">${edit ? "儲存修改" : "新增模板"}</button>
+          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="quickTemplate">取消編輯</button>` : ""}
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-title-row">
+        <h3>快速模板列表</h3>
+        <span class="badge">${rows.length} 個</span>
+      </div>
+      ${renderTemplateCards(rows)}
+    </div>
+  `;
+}
+
+function renderTemplateCards(rows) {
+  if (!rows.length) {
+    return `
+      <div class="empty">
+        尚無自訂模板。記一筆頁目前會使用預設模板；新增任一自訂模板後，會改用你的自訂模板。
+      </div>
+    `;
+  }
+
+  return `
+    <div class="mobile-card-list always-card-list">
+      ${rows.map(t => {
+        const category = state.data.categories.find(c => c.id === t.category_id);
+        const budget = state.data.budgetItems.find(b => b.id === t.budget_item_id);
+        const account = state.data.accounts.find(a => a.id === t.account_id);
+        return `
+          <div class="mobile-data-card">
+            <div class="mobile-data-head">
+              <div>
+                <strong>${escapeHtml(t.name)}</strong>
+                <span>${escapeHtml(labelOf(t.type))} · ${escapeHtml(account?.name || "未指定帳戶")}</span>
+              </div>
+              <span class="badge">${t.is_active === false ? "停用" : "啟用"}</span>
+            </div>
+            <div class="mobile-data-meta">
+              ${category ? `<span class="badge">${escapeHtml(category.name)}</span>` : ""}
+              ${budget ? `<span class="badge">${escapeHtml(budget.name)}</span>` : ""}
+              <span class="badge">${escapeHtml(labelOf(t.necessity_level || "other"))}</span>
+              <span class="badge">${escapeHtml(labelOf(t.cashflow_nature || "variable"))}</span>
+            </div>
+            <div class="mobile-card-actions">
+              <button class="btn small secondary" type="button" data-edit-template="${t.id}">編輯</button>
+              <button type="button" class="btn small danger" data-delete="quick_templates:${t.id}">刪除</button>
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
 function renderMobileMore() {
   const items = [
     { tab: "accounts", title: "帳戶", desc: "現金、銀行、電子支付、信用卡餘額" },
     { tab: "categories", title: "分類 / 標籤", desc: "調整分類、顏色與標籤" },
     { tab: "recurring", title: "訂閱管理", desc: "固定扣款、下次扣款日與取消狀態" },
+    { tab: "templates", title: "模板管理", desc: "自訂快速記一筆模板與預設分類" },
     { tab: "creditLoans", title: "信用卡 / 貸款", desc: "信用卡總帳、貸款與債務" },
     { tab: "goals", title: "目標", desc: "儲蓄、旅遊、還債與大額購買" },
     { tab: "settings", title: "設定", desc: "匯出資料、連線狀態與提醒" }
@@ -2648,6 +2768,9 @@ async function handleSubmit(event) {
       case "goalForm":
         saved = await saveGoal(form);
         break;
+      case "quickTemplateForm":
+        saved = await saveQuickTemplate(form);
+        break;
       default:
         throw new Error(`未知表單：${formId || "無 id"}`);
     }
@@ -2655,7 +2778,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v14 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v24 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -2672,7 +2795,8 @@ function formToTable(formId) {
     recurringForm: "recurring_transactions",
     creditCardForm: "credit_cards",
     loanForm: "loans",
-    goalForm: "goals"
+    goalForm: "goals",
+    quickTemplateForm: "quick_templates"
   }[formId] || formId;
 }
 
@@ -2690,7 +2814,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v14 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v24 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -2876,6 +3000,28 @@ async function saveGoal(form) {
   return await upsert("goals", payload, { expect: { name: payload.name } });
 }
 
+
+async function saveQuickTemplate(form) {
+  const d = readForm(form);
+  const payload = {
+    id: d.id || undefined,
+    name: d.name,
+    type: d.type || "expense",
+    account_id: d.account_id || null,
+    to_account_id: d.type === "transfer" ? d.to_account_id || null : null,
+    category_id: d.category_id || null,
+    budget_item_id: d.budget_item_id || null,
+    merchant: d.merchant,
+    payment_method: d.payment_method,
+    necessity_level: d.necessity_level || "other",
+    cashflow_nature: d.cashflow_nature || "variable",
+    note: d.note,
+    sort_order: Number(d.sort_order || 0),
+    is_active: boolValue(d.is_active)
+  };
+  return await upsert("quick_templates", payload, { expect: { name: payload.name, type: payload.type } });
+}
+
 function clearEditing() {
   Object.keys(state.editing).forEach(k => state.editing[k] = null);
 }
@@ -2964,6 +3110,12 @@ function bindRenderedEvents() {
     state.editing.recurring = state.data.recurring.find(x => x.id === btn.dataset.editRecurring);
     render();
   }));
+  $$("[data-edit-template]").forEach(btn => btn.addEventListener("click", () => {
+    state.editing.quickTemplate = state.data.quickTemplates.find(x => x.id === btn.dataset.editTemplate);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    render();
+  }));
+
   $$("[data-edit-card]").forEach(btn => btn.addEventListener("click", () => {
     state.editing.creditCard = state.data.creditCards.find(x => x.id === btn.dataset.editCard);
     render();
@@ -3001,7 +3153,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v23 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v24 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
