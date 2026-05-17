@@ -64,3 +64,6 @@ v32：修正匯出成功提示會一直黏在畫面上，以及切頁後標題 /
 
 
 v33：修正點「報表」只改表頭、內容停留在上一頁的問題。原因是 v31/v32 報表函式呼叫到缺失的 activeMonthBuckets，導致 renderReports 中斷；v33 補回月份工具函式，並加入 render 錯誤提示，不再靜默保留舊內容。
+
+
+v34：修正帳面淨資產等折線圖 tooltip 顯示 $0 的錯誤。原因是 Chart.js line chart 的 parsed.x 是資料點索引，應改用 parsed.y 作為金額；並補充淨資產圖縱軸自動縮放說明。

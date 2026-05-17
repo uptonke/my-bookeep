@@ -1603,7 +1603,7 @@ function renderReports() {
       <div class="card chart-card">
         <div class="card-title-row"><h3>帳面淨資產</h3><span class="badge">帳戶餘額</span></div>
         <div class="chart-canvas-wrap"><canvas id="reportsNetWorthChart"></canvas></div>
-        <p class="chart-note">依帳戶期初餘額 + 累積收支估算；只顯示記帳開始後的月份，不等於股票即時市值。</p>
+        <p class="chart-note">依帳戶期初餘額 + 累積收支估算；只顯示記帳開始後的月份，不等於股票即時市值。若資料點很少，縱軸會自動縮放，不一定從 0 開始。</p>
       </div>
     </div>
 
@@ -2466,13 +2466,22 @@ function initCharts() {
 
   Chart.defaults.font.family = 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Segoe UI", sans-serif';
 
+  const tooltipValue = ctx => {
+    // v34：修正 line chart tooltip。
+    // Chart.js 線圖 parsed.x 是資料點索引，不能拿來當金額；金額應取 parsed.y。
+    if (ctx.chart?.config?.type === "line") return ctx.parsed?.y;
+    if (ctx.chart?.config?.type === "bar") return ctx.parsed?.x ?? ctx.parsed?.y;
+    if (typeof ctx.parsed === "number") return ctx.parsed;
+    return ctx.parsed?.y ?? ctx.parsed?.x ?? 0;
+  };
+
   const baseOptions = {
     responsive: true,
     maintainAspectRatio: false,
     animation: { duration: 240 },
     plugins: {
       legend: { labels: { color: theme.text, usePointStyle: true, pointStyle: "circle", boxWidth: 8, boxHeight: 8 } },
-      tooltip: { callbacks: { label: ctx => `${ctx.dataset?.label || ctx.label}：${moneyTooltip(ctx.parsed.x ?? ctx.parsed.y ?? ctx.parsed)}` } }
+      tooltip: { callbacks: { label: ctx => `${ctx.dataset?.label || ctx.label}：${moneyTooltip(tooltipValue(ctx))}` } }
     }
   };
 
