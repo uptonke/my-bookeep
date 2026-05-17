@@ -439,3 +439,94 @@ td.actions { width: 126px; }
   color: var(--muted);
   font-size: 12px;
 }
+
+
+/* v18: true T-account layout */
+.t-account-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.t-account-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+  background: rgba(2, 6, 23, 0.22);
+}
+
+.t-account-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.t-account-name {
+  font-weight: 900;
+}
+
+.t-account-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 140px;
+}
+
+.t-side {
+  padding: 12px;
+}
+
+.t-side + .t-side {
+  border-left: 2px solid rgba(248, 250, 252, 0.28);
+}
+
+.t-side-title {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+  font-weight: 800;
+}
+
+.t-entry {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13px;
+}
+
+.t-entry:last-child {
+  border-bottom: 0;
+}
+
+.t-entry-date {
+  display: block;
+  color: var(--subtle);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.t-account-total {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.t-account-total strong {
+  color: var(--text);
+}
+
+@media (max-width: 980px) {
+  .t-account-grid {
+    grid-template-columns: 1fr;
+  }
+}

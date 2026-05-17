@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v16";
+const APP_VERSION = "v18";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -1250,9 +1250,124 @@ function renderReports() {
       ${renderBudgetProgressList(12)}
     </div>
     <div class="card">
-      <h3>借貸帳</h3>
-      <p class="metric-sub">支出：借記費用、貸記資產；退款：借記資產、貸記費用退款；收入：借記資產、貸記收入；轉帳：借記轉入資產、貸記轉出資產。</p>
-      ${renderTAccountTable()}
+      <div class="card-title-row">
+        <h3>T 字帳</h3>
+        <span class="badge">依科目分組</span>
+      </div>
+      <p class="metric-sub">同一筆交易會同時進入借方科目與貸方科目。支出：借記費用、貸記資產；收入：借記資產、貸記收入；轉帳：借記轉入資產、貸記轉出資產。</p>
+      ${renderTAccountCards()}
+    </div>
+  `;
+}
+
+
+function buildTAccountLedgerRows() {
+  const ledger = new Map();
+
+  const addEntry = (accountName, side, tx, memo = "") => {
+    if (!accountName) return;
+    if (!ledger.has(accountName)) {
+      ledger.set(accountName, {
+        name: accountName,
+        debit: [],
+        credit: [],
+        debitTotal: 0,
+        creditTotal: 0
+      });
+    }
+
+    const row = ledger.get(accountName);
+    const entry = {
+      date: tx.transaction_date,
+      amount: Number(tx.amount || 0),
+      memo: memo || tx.merchant || tx.note || labelOf(tx.type)
+    };
+
+    row[side].push(entry);
+    if (side === "debit") row.debitTotal += entry.amount;
+    if (side === "credit") row.creditTotal += entry.amount;
+  };
+
+  transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled")
+    .forEach(t => {
+      const assetOut = `資產：${t.account_name || "未命名帳戶"}`;
+      const assetIn = `資產：${t.to_account_name || "未命名帳戶"}`;
+      const category = t.category_name || "未分類";
+      const memo = t.merchant || t.note || labelOf(t.type);
+
+      if (t.type === "expense") {
+        addEntry(`費用：${category}`, "debit", t, memo);
+        addEntry(assetOut, "credit", t, memo);
+      } else if (t.type === "refund") {
+        addEntry(assetOut, "debit", t, memo || "退款");
+        addEntry(`費用退款：${category}`, "credit", t, memo || "退款");
+      } else if (t.type === "income") {
+        addEntry(assetOut, "debit", t, memo);
+        addEntry(`收入：${category}`, "credit", t, memo);
+      } else if (t.type === "transfer") {
+        addEntry(assetIn, "debit", t, memo || "轉入");
+        addEntry(assetOut, "credit", t, memo || "轉出");
+      }
+    });
+
+  return Array.from(ledger.values())
+    .sort((a, b) => {
+      const order = name => {
+        if (name.startsWith("資產")) return 1;
+        if (name.startsWith("費用")) return 2;
+        if (name.startsWith("費用退款")) return 3;
+        if (name.startsWith("收入")) return 4;
+        return 9;
+      };
+      return order(a.name) - order(b.name) || a.name.localeCompare(b.name);
+    });
+}
+
+function renderTAccountCards() {
+  const rows = buildTAccountLedgerRows();
+  if (!rows.length) return `<div class="empty">尚無資料</div>`;
+
+  const renderSide = entries => {
+    if (!entries.length) return `<div class="muted">—</div>`;
+    return entries.slice(0, 18).map(e => `
+      <div class="t-entry">
+        <span>
+          ${escapeHtml(e.memo || "")}
+          <span class="t-entry-date">${escapeHtml(e.date || "")}</span>
+        </span>
+        <strong class="mono">${fmtMoney(e.amount)}</strong>
+      </div>
+    `).join("") + (entries.length > 18 ? `<div class="metric-sub">另有 ${entries.length - 18} 筆未顯示</div>` : "");
+  };
+
+  return `
+    <div class="t-account-grid">
+      ${rows.map(row => {
+        const net = Number(row.debitTotal || 0) - Number(row.creditTotal || 0);
+        return `
+          <div class="t-account-card">
+            <div class="t-account-head">
+              <span class="t-account-name">${escapeHtml(row.name)}</span>
+              <span class="badge">${net >= 0 ? "借餘" : "貸餘"} ${fmtMoney(Math.abs(net))}</span>
+            </div>
+            <div class="t-account-body">
+              <div class="t-side">
+                <div class="t-side-title">借方</div>
+                ${renderSide(row.debit)}
+              </div>
+              <div class="t-side">
+                <div class="t-side-title">貸方</div>
+                ${renderSide(row.credit)}
+              </div>
+            </div>
+            <div class="t-account-total">
+              <span>借方合計 <strong class="mono">${fmtMoney(row.debitTotal)}</strong></span>
+              <span>貸方合計 <strong class="mono">${fmtMoney(row.creditTotal)}</strong></span>
+            </div>
+          </div>
+        `;
+      }).join("")}
     </div>
   `;
 }
@@ -2249,7 +2364,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v16 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v18 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
