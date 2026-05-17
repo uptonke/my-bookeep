@@ -1514,10 +1514,3 @@ td.actions { width: 126px; }
     font-size: 11px;
   }
 }
-
-
-/* v28: 快速模板點擊回饋 */
-.quick-template-btn:active {
-  transform: scale(0.98);
-  opacity: 0.86;
-}
