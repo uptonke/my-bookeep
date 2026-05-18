@@ -21,6 +21,8 @@ const state = {
     categories: [],
     tags: [],
     budgetItems: [],
+    budgetContributions: [],
+    budgetMovements: [],
     transactions: [],
     transactionView: [],
     accountBalances: [],
@@ -38,6 +40,8 @@ const state = {
   editing: {
     transaction: null,
     budgetItem: null,
+    budgetContribution: null,
+    budgetMovement: null,
     account: null,
     category: null,
     tag: null,
@@ -139,6 +143,8 @@ const labelMaps = {
   none: "無",
   carryover: "餘額結轉",
   overspend_to_next: "超支帶入下期",
+  manual: "手動",
+  month_close: "月底關帳",
 
   cash: "現金",
   bank: "銀行",
@@ -175,6 +181,8 @@ const tableLabelMap = {
   categories: "分類",
   tags: "標籤",
   budget_items: "預算項目",
+  budget_contributions: "預算提撥",
+  budget_movements: "預算移轉",
   transactions: "交易",
   recurring_transactions: "訂閱",
   quick_templates: "快速模板",
@@ -232,6 +240,19 @@ function colorDot(value) {
 
 function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+
+function appPreference(key, fallback = "") {
+  try { return localStorage.getItem(`accounting_${key}`) || fallback; } catch (error) { return fallback; }
+}
+
+function setAppPreference(key, value) {
+  try { localStorage.setItem(`accounting_${key}`, value || ""); } catch (error) { console.warn(error); }
+}
+
+function defaultAccountIdFor(type = "expense") {
+  return appPreference(`default_account_${type}`, appPreference("default_account_expense", ""));
 }
 
 function showAlert(message, type = "warn", options = {}) {
@@ -389,7 +410,7 @@ function yearBudgetContributionCount(year = {}) {
 
 function yearBudgetModeLabel(summary) {
   if ((summary?.budget_mode || "annual_total") === "monthly_contribution") {
-    return `月提撥 ${fmtMoney(summary.monthly_budget)} × ${summary.contribution_count} 次｜起點：記帳開始月`;
+    return `每次提撥 ${fmtMoney(summary.monthly_budget)} × 已提撥 ${summary.contribution_count} 次｜起點：記帳開始月`;
   }
   return "年度總額一次配置";
 }
@@ -440,29 +461,29 @@ function getCurrentYearSummary() {
 }
 
 function budgetIsContributionMode(item) {
-  return item?.rollover_mode === "carryover" && ["monthly", "weekly"].includes(item?.period_type);
+  return item?.rollover_mode === "carryover" && ["monthly", "weekly", "custom"].includes(item?.period_type);
 }
 
 function budgetContributionCount(item) {
   const year = Number(state.selectedBudgetYear);
   const now = new Date();
   const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1;
 
   if (!budgetIsContributionMode(item)) return 1;
+  if (year > currentYear) return 0;
 
-  if (item.period_type === "monthly") {
-    if (year < currentYear) return 12;
-    if (year > currentYear) return 0;
-    return currentMonth;
+  const period = item.period_type || "monthly";
+  const startDate = item.start_date ? new Date(`${item.start_date}T00:00:00`) : new Date(year, 0, 1);
+  const endDate = year === currentYear ? now : new Date(year, 11, 31);
+
+  if (endDate < startDate) return 0;
+
+  if (period === "monthly") {
+    return Math.max(1, (endDate.getFullYear() - startDate.getFullYear()) * 12 + (endDate.getMonth() - startDate.getMonth()) + 1);
   }
 
-  if (item.period_type === "weekly") {
-    if (year < currentYear) return 52;
-    if (year > currentYear) return 0;
-
-    const start = new Date(year, 0, 1);
-    const diffDays = Math.floor((now - start) / 86400000) + 1;
+  if (period === "weekly") {
+    const diffDays = Math.floor((endDate - startDate) / 86400000) + 1;
     return Math.max(1, Math.ceil(diffDays / 7));
   }
 
@@ -470,15 +491,15 @@ function budgetContributionCount(item) {
 }
 
 function budgetCurrentAvailableAmount(item) {
-  const base = Number(item?.planned_amount || 0);
-  const count = budgetContributionCount(item);
-  if (budgetIsContributionMode(item)) return base * count;
-  return base;
+  const movementNet = budgetMovementNet(item.id || item.budget_item_id);
+  if (budgetIsContributionMode(item)) return budgetContributionTotal(item.id || item.budget_item_id) + movementNet;
+  return Number(item?.planned_amount || 0) + movementNet;
 }
 
 function budgetFundingLabel(item) {
   if (budgetIsContributionMode(item)) {
-    return `${labelOf(item.period_type)}提撥 ${fmtMoney(item.planned_amount)} × ${budgetContributionCount(item)} 次`;
+    const itemId = item.id || item.budget_item_id;
+    return `實際提撥 ${budgetContributionCountActual(itemId)} 筆，累積 ${fmtMoney(budgetContributionTotal(itemId))}`;
   }
   if (item?.period_type && item.period_type !== "annual") {
     return `${labelOf(item.period_type)} ${fmtMoney(item.planned_amount)}`;
@@ -487,8 +508,31 @@ function budgetFundingLabel(item) {
 }
 
 function budgetAvailableLabel(item) {
-  if (budgetIsContributionMode(item)) return `目前可用 ${fmtMoney(item.current_budget_amount || 0)}`;
+  if (budgetIsContributionMode(item)) return `累積提撥 ${fmtMoney(item.current_budget_amount || 0)}`;
   return `預算 ${fmtMoney(item.current_budget_amount || item.planned_amount || 0)}`;
+}
+
+
+function movementsForBudgetItem(itemId) {
+  return (state.data.budgetMovements || [])
+    .filter(m => contributionYear(m.movement_date) === Number(state.selectedBudgetYear))
+    .filter(m => m.from_budget_item_id === itemId || m.to_budget_item_id === itemId);
+}
+
+function budgetMovementInTotal(itemId) {
+  return movementsForBudgetItem(itemId)
+    .filter(m => m.to_budget_item_id === itemId)
+    .reduce((sum, m) => sum + Number(m.amount || 0), 0);
+}
+
+function budgetMovementOutTotal(itemId) {
+  return movementsForBudgetItem(itemId)
+    .filter(m => m.from_budget_item_id === itemId)
+    .reduce((sum, m) => sum + Number(m.amount || 0), 0);
+}
+
+function budgetMovementNet(itemId) {
+  return budgetMovementInTotal(itemId) - budgetMovementOutTotal(itemId);
 }
 
 function budgetItemSummariesForSelectedYear() {
@@ -504,8 +548,12 @@ function budgetItemSummariesForSelectedYear() {
         return sum;
       }, 0);
       const planned_amount = Number(i.planned_amount || 0);
-      const contribution_count = budgetContributionCount(i);
       const is_contribution_mode = budgetIsContributionMode(i);
+      const contribution_count = is_contribution_mode ? budgetContributionCountActual(i.id) : budgetContributionCount(i);
+      const contribution_total = is_contribution_mode ? budgetContributionTotal(i.id) : 0;
+      const movement_in = budgetMovementInTotal(i.id);
+      const movement_out = budgetMovementOutTotal(i.id);
+      const movement_net = movement_in - movement_out;
       const current_budget_amount = budgetCurrentAvailableAmount(i);
       return {
         ...i,
@@ -515,6 +563,10 @@ function budgetItemSummariesForSelectedYear() {
         category_type: category.type || "",
         planned_amount,
         contribution_count,
+        contribution_total,
+        movement_in,
+        movement_out,
+        movement_net,
         is_contribution_mode,
         current_budget_amount,
         funding_label: budgetFundingLabel({ ...i, planned_amount }),
@@ -556,6 +608,8 @@ async function loadAll() {
     categories: queryTable("categories", { order: { column: "sort_order", ascending: true } }),
     tags: queryTable("tags", { order: { column: "name", ascending: true } }),
     budgetItems: queryTable("budget_items", { order: { column: "sort_order", ascending: true } }),
+    budgetContributions: queryTable("budget_contributions", { order: { column: "contribution_date", ascending: false } }),
+    budgetMovements: queryTable("budget_movements", { order: { column: "movement_date", ascending: false } }),
     transactions: queryTable("transactions", { order: { column: "transaction_date", ascending: false } }),
     transactionView: queryTable("v_transactions_full", { order: { column: "transaction_date", ascending: false } }),
     accountBalances: queryTable("v_account_balances", { order: { column: "sort_order", ascending: true } }),
@@ -961,6 +1015,7 @@ function renderTxModePicker(current) {
 
 function renderTxPrimaryFields(type, edit = {}) {
   const accountLabel = type === "income" ? "入帳帳戶" : type === "transfer" ? "轉出帳戶" : type === "refund" ? "退款入帳帳戶" : "付款帳戶";
+  const defaultAccount = edit?.account_id || defaultAccountIdFor(type);
   const merchantLabel = type === "income" ? "收入來源" : type === "transfer" ? "用途" : type === "refund" ? "退款來源" : "商家 / 對象";
   const merchantPlaceholder = type === "income" ? "例：打工薪資、股息、退稅" : type === "transfer" ? "例：信用卡繳款、投資轉帳" : type === "refund" ? "例：退票退款、退貨退款" : "例：早餐、威秀、Blue Note";
   const categoryLabel = type === "income" ? "收入分類" : "分類";
@@ -1161,6 +1216,251 @@ function renderTxTable(rows) {
 }
 
 
+
+function budgetContributionOptions(selected = "") {
+  const rows = budgetItemSummariesForSelectedYear()
+    .filter(i => i.is_active !== false)
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name)));
+  return optionList(rows, selected, "name", "budget_item_id", "請選擇預算項目");
+}
+
+function enrichedBudgetContributionsForSelectedYear() {
+  return (state.data.budgetContributions || [])
+    .filter(c => contributionYear(c.contribution_date) === Number(state.selectedBudgetYear))
+    .map(c => {
+      const item = state.data.budgetItems.find(i => i.id === c.budget_item_id) || {};
+      return {
+        ...c,
+        budget_item_name: item.name || "未命名項目",
+        period_type: item.period_type || "",
+        rollover_mode: item.rollover_mode || ""
+      };
+    })
+    .sort((a, b) => String(b.contribution_date || "").localeCompare(String(a.contribution_date || "")) || String(b.created_at || "").localeCompare(String(a.created_at || "")));
+}
+
+function renderBudgetContributionSection(items) {
+  const edit = state.editing.budgetContribution;
+  const rows = enrichedBudgetContributionsForSelectedYear();
+
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>${edit ? "編輯預算提撥" : "新增預算提撥"}</h3>
+        <span class="badge">手動提撥紀錄</span>
+      </div>
+      <p class="metric-sub">提撥型預算現在以「實際提撥紀錄」為準，不再用系統推估次數。適合出國、高端餐飲、大額購物等累積型預算。</p>
+      <form id="budgetContributionForm" class="form-grid">
+        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+        ${field("預算項目", `<select class="input" name="budget_item_id" required>${budgetContributionOptions(edit?.budget_item_id || "")}</select>`)}
+        ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(edit?.contribution_date || today())}" required>`)}
+        ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="例：20000">`)}
+        <div class="field wide">
+          <label>備註</label>
+          <textarea class="input" name="note" placeholder="例：5 月旅行基金、加碼提撥">${escapeHtml(edit?.note || "")}</textarea>
+        </div>
+        <div class="wide btn-row">
+          <button class="btn" type="submit">${edit ? "儲存修改" : "新增提撥"}</button>
+          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetContribution">取消編輯</button>` : ""}
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-title-row">
+        <h3>提撥紀錄</h3>
+        <span class="badge">${rows.length} 筆</span>
+      </div>
+      ${renderBudgetContributionTable(rows)}
+    </div>
+  `;
+}
+
+function renderBudgetContributionTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無提撥紀錄。提撥型預算需要先新增提撥，才會產生可用額度。</div>`;
+
+  const mobileCards = `
+    <div class="mobile-card-list">
+      ${rows.slice(0, 80).map(r => `
+        <div class="mobile-data-card">
+          <div class="mobile-data-head">
+            <div>
+              <strong>${escapeHtml(r.budget_item_name)}</strong>
+              <span>${escapeHtml(r.contribution_date || "")}</span>
+            </div>
+            <div class="mobile-amount">${fmtMoney(r.amount)}</div>
+          </div>
+          <div class="mobile-data-meta">
+            ${r.note ? `<span>${escapeHtml(r.note)}</span>` : ""}
+          </div>
+          <div class="mobile-card-actions">
+            <button class="btn small secondary" type="button" data-edit-contribution="${r.id}">編輯</button>
+            <button type="button" class="btn small danger" data-delete="budget_contributions:${r.id}">刪除</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  const tableView = `
+    <div class="table-wrap desktop-table">
+      <table>
+        <thead><tr><th>日期</th><th>預算項目</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
+        <tbody>
+          ${rows.slice(0, 120).map(r => `
+            <tr>
+              <td>${escapeHtml(r.contribution_date || "")}</td>
+              <td>${escapeHtml(r.budget_item_name)}</td>
+              <td class="mono good">${fmtMoney(r.amount)}</td>
+              <td>${escapeHtml(r.note || "")}</td>
+              <td class="actions">
+                <button class="btn small secondary" type="button" data-edit-contribution="${r.id}">編輯</button>
+                <button type="button" class="btn small danger" data-delete="budget_contributions:${r.id}">刪除</button>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  return `${mobileCards}${tableView}`;
+}
+
+
+function enrichedBudgetMovementsForSelectedYear() {
+  return (state.data.budgetMovements || [])
+    .filter(m => contributionYear(m.movement_date) === Number(state.selectedBudgetYear))
+    .map(m => {
+      const fromItem = state.data.budgetItems.find(i => i.id === m.from_budget_item_id) || {};
+      const toItem = state.data.budgetItems.find(i => i.id === m.to_budget_item_id) || {};
+      return {
+        ...m,
+        from_name: fromItem.name || "未指定",
+        to_name: toItem.name || "未指定"
+      };
+    })
+    .sort((a, b) => String(b.movement_date || "").localeCompare(String(a.movement_date || "")) || String(b.created_at || "").localeCompare(String(a.created_at || "")));
+}
+
+function renderBudgetMovementSection() {
+  const edit = state.editing.budgetMovement;
+  const rows = enrichedBudgetMovementsForSelectedYear();
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>${edit ? "編輯預算移轉" : "預算項目移轉"}</h3>
+        <span class="badge">Envelope</span>
+      </div>
+      <p class="metric-sub">用來把一個 envelope 的餘額挪到另一個 envelope，例如「高端餐飲」轉 2,000 到「出國」。這不是收入，也不是支出。</p>
+      <form id="budgetMovementForm" class="form-grid">
+        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+        ${field("日期", `<input class="input" type="date" name="movement_date" value="${escapeHtml(edit?.movement_date || today())}" required>`)}
+        ${field("從哪個預算扣", `<select class="input" name="from_budget_item_id" required>${budgetContributionOptions(edit?.from_budget_item_id || "")}</select>`)}
+        ${field("移到哪個預算", `<select class="input" name="to_budget_item_id" required>${budgetContributionOptions(edit?.to_budget_item_id || "")}</select>`)}
+        ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
+        <div class="field wide">
+          <label>備註</label>
+          <textarea class="input" name="note" placeholder="例：月底補出國預算">${escapeHtml(edit?.note || "")}</textarea>
+        </div>
+        <div class="wide btn-row">
+          <button class="btn" type="submit">${edit ? "儲存修改" : "新增移轉"}</button>
+          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetMovement">取消編輯</button>` : ""}
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-title-row">
+        <h3>預算移轉紀錄</h3>
+        <span class="badge">${rows.length} 筆</span>
+      </div>
+      ${renderBudgetMovementTable(rows)}
+    </div>
+  `;
+}
+
+function renderBudgetMovementTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無預算移轉紀錄。</div>`;
+  const mobileCards = `
+    <div class="mobile-card-list">
+      ${rows.slice(0, 80).map(r => `
+        <div class="mobile-data-card">
+          <div class="mobile-data-head">
+            <div>
+              <strong>${escapeHtml(r.from_name)} → ${escapeHtml(r.to_name)}</strong>
+              <span>${escapeHtml(r.movement_date || "")}</span>
+            </div>
+            <div class="mobile-amount">${fmtMoney(r.amount)}</div>
+          </div>
+          <div class="mobile-data-meta">${r.note ? `<span>${escapeHtml(r.note)}</span>` : ""}</div>
+          <div class="mobile-card-actions">
+            <button class="btn small secondary" type="button" data-edit-movement="${r.id}">編輯</button>
+            <button type="button" class="btn small danger" data-delete="budget_movements:${r.id}">刪除</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
+  const tableView = `
+    <div class="table-wrap desktop-table">
+      <table>
+        <thead><tr><th>日期</th><th>從</th><th>到</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
+        <tbody>${rows.slice(0, 120).map(r => `
+          <tr>
+            <td>${escapeHtml(r.movement_date || "")}</td>
+            <td>${escapeHtml(r.from_name)}</td>
+            <td>${escapeHtml(r.to_name)}</td>
+            <td class="mono">${fmtMoney(r.amount)}</td>
+            <td>${escapeHtml(r.note || "")}</td>
+            <td class="actions">
+              <button class="btn small secondary" type="button" data-edit-movement="${r.id}">編輯</button>
+              <button type="button" class="btn small danger" data-delete="budget_movements:${r.id}">刪除</button>
+            </td>
+          </tr>`).join("")}</tbody>
+      </table>
+    </div>`;
+  return `${mobileCards}${tableView}`;
+}
+
+function renderMonthCloseAdvisor() {
+  const rows = budgetItemSummariesForSelectedYear();
+  const overspent = rows.filter(r => Number(r.remaining_amount || 0) < 0).sort((a, b) => Number(a.remaining_amount) - Number(b.remaining_amount));
+  const surplus = rows.filter(r => Number(r.remaining_amount || 0) > 0).sort((a, b) => Number(b.remaining_amount) - Number(a.remaining_amount)).slice(0, 6);
+  const fixed = transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled" && t.type === "expense" && t.cashflow_nature === "fixed")
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const variable = transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled" && t.type === "expense" && t.cashflow_nature === "variable")
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const oneTime = transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled" && t.type === "expense" && t.cashflow_nature === "one_time")
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>月底關帳檢查</h3>
+        <span class="badge">Decision</span>
+      </div>
+      <div class="grid cols-3">
+        ${metricCard("固定支出", fmtMoney(fixed), "fixed")}
+        ${metricCard("變動支出", fmtMoney(variable), "variable")}
+        ${metricCard("一次性支出", fmtMoney(oneTime), "one-time")}
+      </div>
+      <div class="grid cols-2">
+        <div>
+          <h4>需要補洞的預算</h4>
+          ${overspent.length ? `<ul class="plain-list">${overspent.map(r => `<li>${escapeHtml(r.name)}：超支 ${fmtMoney(Math.abs(r.remaining_amount))}</li>`).join("")}</ul>` : `<p class="metric-sub">目前沒有超支 envelope。</p>`}
+        </div>
+        <div>
+          <h4>可挪用的預算</h4>
+          ${surplus.length ? `<ul class="plain-list">${surplus.map(r => `<li>${escapeHtml(r.name)}：剩餘 ${fmtMoney(r.remaining_amount)}</li>`).join("")}</ul>` : `<p class="metric-sub">目前沒有明顯可挪用 envelope。</p>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderBudget() {
   const editYear = state.editing.year;
   const editItem = state.editing.budgetItem;
@@ -1171,7 +1471,7 @@ function renderBudget() {
   return `
     <div class="grid cols-4">
       ${metricCard("目前可用預算", fmtMoney(current.available_budget), yearBudgetModeLabel(current))}
-      ${metricCard("年度總預算", fmtMoney(current.annual_budget), current.budget_mode === "monthly_contribution" ? "每月預算 × 12" : "年度總額")}
+      ${metricCard("年度總預算", fmtMoney(current.annual_budget), current.budget_mode === "monthly_contribution" ? "每次提撥 × 12" : "年度總額")}
       ${metricCard("已用預算", fmtMoney(current.actual_expense), `${fmtNumber(current.budget_used_pct, 1)}%`, "bad")}
       ${metricCard("剩餘可用預算", fmtMoney(current.remaining_budget), Number(current.remaining_budget || 0) >= 0 ? "預算內" : "超支", Number(current.remaining_budget || 0) >= 0 ? "good" : "bad")}
     </div>
@@ -1181,9 +1481,15 @@ function renderBudget() {
         <h3>預算項目</h3>
         <span class="badge">${items.length} 項</span>
       </div>
-      <p class="metric-sub">先看每個項目的「目前可用 / 實際 / 剩餘 / 使用率」。若期間選每月或每週、結轉模式選餘額結轉，會改用「每次提撥 × 已提撥次數 − 已花費」計算。</p>
+      <p class="metric-sub">先看每個項目的「目前可用 / 實際 / 剩餘 / 使用率」。若期間選每月或每週、結轉模式選餘額結轉，會改用「實際提撥紀錄累積 − 已花費」計算。</p>
       ${renderBudgetItemTable(items)}
     </div>
+
+    ${renderBudgetContributionSection(items)}
+
+    ${renderBudgetMovementSection()}
+
+    ${renderMonthCloseAdvisor()}
 
     <details class="card budget-editor" ${showEditor ? "open" : ""}>
       <summary>${editYear || editItem ? "正在編輯預算" : "新增 / 編輯年度與預算項目"}</summary>
@@ -1199,7 +1505,7 @@ function renderBudget() {
               ${selectOpts(["annual_total","monthly_contribution"], editYear?.budget_mode || current.budget_mode || "annual_total")}
             </select>`)}
             ${field("年度總預算", `<input class="input" type="number" step="1" name="annual_budget" value="${escapeHtml(editYear?.annual_budget ?? current.annual_budget ?? 0)}" placeholder="年度總額模式使用">`)}
-            ${field("每月預算", `<input class="input" type="number" step="1" name="monthly_budget" value="${escapeHtml(editYear?.monthly_budget ?? current.monthly_budget ?? 0)}" placeholder="月提撥模式使用">`)}
+            ${field("每次提撥金額", `<input class="input" type="number" step="1" name="monthly_budget" value="${escapeHtml(editYear?.monthly_budget ?? current.monthly_budget ?? 0)}" placeholder="月提撥模式使用">`)}
             ${field("計算起點", `<select class="input" name="budget_start_mode">
               <option value="record_start" selected>記帳開始月（模式 B）</option>
             </select>`)}
@@ -1230,6 +1536,8 @@ function renderBudget() {
               <div class="form-grid two">
                 ${field("期間", `<select class="input" name="period_type">${selectOpts(["annual","monthly","weekly","custom"], editItem?.period_type || "annual")}</select>`)}
                 ${field("結轉模式", `<select class="input" name="rollover_mode">${selectOpts(["none","carryover","overspend_to_next"], editItem?.rollover_mode || "none")}</select>`)}
+                ${field("提撥起始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(editItem?.start_date || "")}">`)}
+                ${field("提撥結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(editItem?.end_date || "")}">`)}
                 ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(editItem?.sort_order || 0)}">`)}
                 ${field("啟用", `<select class="input" name="is_active">
                   <option value="true" ${editItem?.is_active !== false ? "selected" : ""}>啟用</option>
@@ -1272,6 +1580,7 @@ function renderBudgetItemTable(rows) {
             <div class="mobile-data-meta">
               <span>${escapeHtml(i.is_contribution_mode ? "提撥型" : "固定型")}</span>
               <span>${escapeHtml(i.funding_label)}</span>
+              ${i.movement_net ? `<span>移轉淨額 ${fmtMoney(i.movement_net)}</span>` : ""}
               <span>實際 ${fmtMoney(i.actual_amount)}</span>
               <span>${Number(i.remaining_amount || 0) >= 0 ? `剩餘 ${fmtMoney(i.remaining_amount)}` : `超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
               <span>${fmtNumber(pct, 1)}%</span>
@@ -1300,7 +1609,7 @@ function renderBudgetItemTable(rows) {
                 <td>${escapeHtml(i.category_name || "")}</td>
                 <td>
                   <span class="badge">${escapeHtml(i.is_contribution_mode ? "提撥型" : "固定型")}</span>
-                  <div class="muted">${escapeHtml(i.funding_label)}</div>
+                  <div class="muted">${escapeHtml(i.funding_label)}${i.movement_net ? `｜移轉淨額 ${fmtMoney(i.movement_net)}` : ""}</div>
                 </td>
                 <td class="mono">${fmtMoney(i.current_budget_amount)}</td>
                 <td class="mono bad">${fmtMoney(i.actual_amount)}</td>
@@ -1697,10 +2006,95 @@ function renderGoalCards() {
   `;
 }
 
+
+function renderCashflowStatementCard() {
+  const rows = cashflowStatementRows();
+  return `
+    <div class="card">
+      <div class="card-title-row"><h3>年度現金流量表</h3><span class="badge">Direct Method</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>區塊</th><th>項目</th><th>金額</th><th>比例</th><th>備註</th></tr></thead>
+          <tbody>${rows.map(r => `<tr><td>${escapeHtml(r.section)}</td><td>${escapeHtml(r.item)}</td><td class="mono">${typeof r.amount === "number" ? fmtMoney(r.amount) : escapeHtml(r.amount)}</td><td>${escapeHtml(r.ratio)}</td><td>${escapeHtml(r.note)}</td></tr>`).join("")}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderBudgetVarianceCard() {
+  const rows = getBudgetCompareRows(999).sort((a, b) => Math.abs(b.remaining) - Math.abs(a.remaining)).slice(0, 12);
+  if (!rows.length) return `<div class="card"><h3>預算差異分析</h3><div class="empty">尚無預算資料。</div></div>`;
+  return `
+    <div class="card">
+      <div class="card-title-row"><h3>預算差異分析</h3><span class="badge">Variance</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>項目</th><th>目前可用</th><th>實際</th><th>差異</th></tr></thead>
+          <tbody>${rows.map(r => `<tr><td>${escapeHtml(r.name)}</td><td class="mono">${fmtMoney(r.planned)}</td><td class="mono bad">${fmtMoney(r.actual)}</td><td class="mono ${r.remaining >= 0 ? "good" : "bad"}">${fmtMoney(r.remaining)}</td></tr>`).join("")}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderBurnRateCard() {
+  const nowMonth = new Date().getMonth() + 1;
+  const rows = budgetItemSummariesForSelectedYear()
+    .filter(r => Number(r.current_budget_amount || 0) > 0)
+    .map(r => {
+      const burn = Number(r.actual_amount || 0) / Math.max(1, nowMonth);
+      const runway = burn > 0 ? Number(r.remaining_amount || 0) / burn : null;
+      return { ...r, burn, runway };
+    })
+    .sort((a, b) => Number(a.runway ?? 9999) - Number(b.runway ?? 9999))
+    .slice(0, 8);
+  return `
+    <div class="card">
+      <div class="card-title-row"><h3>預算 Burn Rate</h3><span class="badge">Forecast</span></div>
+      ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>項目</th><th>平均月花費</th><th>剩餘</th><th>估計還能撐</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.name)}</td><td class="mono">${fmtMoney(r.burn)}</td><td class="mono">${fmtMoney(r.remaining_amount)}</td><td>${r.runway === null ? "N/A" : `${fmtNumber(r.runway, 1)} 個月`}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">尚無資料。</div>`}
+    </div>
+  `;
+}
+
+function renderLongTermTrendCard() {
+  const all = allTransactionsEnriched().filter(t => t.status !== "cancelled");
+  const grouped = new Map();
+  all.forEach(t => {
+    const key = `${t.tx_year}-${String(t.tx_month).padStart(2, "0")}`;
+    if (!grouped.has(key)) grouped.set(key, { month: key, income: 0, expense: 0, net: 0 });
+    const row = grouped.get(key);
+    if (t.type === "income") row.income += Number(t.amount || 0);
+    if (t.type === "expense") row.expense += Number(t.amount || 0);
+    if (t.type === "refund") row.expense -= Number(t.amount || 0);
+    row.net = row.income - row.expense;
+  });
+  const rows = Array.from(grouped.values()).sort((a, b) => a.month.localeCompare(b.month)).slice(-24);
+  return `
+    <div class="card">
+      <div class="card-title-row"><h3>長期趨勢</h3><span class="badge">近 24 個月</span></div>
+      ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>月份</th><th>收入</th><th>淨支出</th><th>淨現金流</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.month)}</td><td class="mono good">${fmtMoney(r.income)}</td><td class="mono bad">${fmtMoney(r.expense)}</td><td class="mono ${r.net >= 0 ? "good" : "bad"}">${fmtMoney(r.net)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">尚無跨月資料。</div>`}
+    </div>
+  `;
+}
+
+function renderDecisionReports() {
+  return `
+    ${renderCashflowStatementCard()}
+    <div class="grid cols-2">
+      ${renderBudgetVarianceCard()}
+      ${renderBurnRateCard()}
+    </div>
+    ${renderLongTermTrendCard()}
+  `;
+}
+
 function renderReports() {
   return `
     ${renderChartToolbar()}
     ${renderAnalyticsSummaryCards()}
+
+    ${renderDecisionReports()}
 
     <div class="card chart-card">
       <div class="card-title-row">
@@ -2334,13 +2728,28 @@ function renderSettings() {
       </div>
       <div class="card">
         <h3>資料匯出</h3>
-        <p class="metric-sub">可匯出「流水帳明細」或「現金流量表格式」的 Excel CSV。現金流量表適合貼到 Excel 做月報 / 年報。</p>
+        <p class="metric-sub">可匯出流水帳 CSV、現金流量表 CSV，或完整 Excel .xlsx 工作簿。</p>
         <div class="btn-row">
           <button class="btn secondary" id="exportCsvBtn">匯出流水帳 CSV</button>
           <button class="btn secondary" id="exportCashflowCsvBtn">匯出現金流量表 CSV</button>
+          <button class="btn secondary" id="exportXlsxBtn">匯出 Excel .xlsx</button>
           <button class="btn secondary" id="downloadJsonBtn">下載暫存資料</button>
         </div>
       </div>
+    </div>
+
+    <div class="card">
+      <h3>預設常用帳戶</h3>
+      <p class="metric-sub">手機快速記帳會優先帶入這些帳戶。設定存在本機瀏覽器，不會寫入資料庫。</p>
+      <form id="preferencesForm" class="form-grid two">
+        ${field("支出預設帳戶", `<select class="input" name="default_account_expense">${accountOptions(defaultAccountIdFor("expense"))}</select>`)}
+        ${field("收入預設帳戶", `<select class="input" name="default_account_income">${accountOptions(defaultAccountIdFor("income"))}</select>`)}
+        ${field("轉帳預設轉出帳戶", `<select class="input" name="default_account_transfer">${accountOptions(defaultAccountIdFor("transfer"))}</select>`)}
+        ${field("退款預設帳戶", `<select class="input" name="default_account_refund">${accountOptions(defaultAccountIdFor("refund"))}</select>`)}
+        <div class="wide btn-row">
+          <button class="btn" type="submit">儲存偏好</button>
+        </div>
+      </form>
     </div>
 
     <div class="card">
@@ -3054,6 +3463,12 @@ async function handleSubmit(event) {
       case "budgetItemForm":
         saved = await saveBudgetItem(form);
         break;
+      case "budgetContributionForm":
+        saved = await saveBudgetContribution(form);
+        break;
+      case "budgetMovementForm":
+        saved = await saveBudgetMovement(form);
+        break;
       case "accountForm":
         saved = await saveAccount(form);
         break;
@@ -3077,6 +3492,10 @@ async function handleSubmit(event) {
       case "quickTemplateForm":
         saved = await saveQuickTemplate(form);
         break;
+      case "preferencesForm":
+        savePreferences(form);
+        saved = { id: "local" };
+        break;
       default:
         throw new Error(`未知表單：${formId || "無 id"}`);
     }
@@ -3084,7 +3503,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v31 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v40 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3095,6 +3514,8 @@ function formToTable(formId) {
     txForm: "transactions",
     yearForm: "years",
     budgetItemForm: "budget_items",
+    budgetContributionForm: "budget_contributions",
+    budgetMovementForm: "budget_movements",
     accountForm: "accounts",
     categoryForm: "categories",
     tagForm: "tags",
@@ -3102,7 +3523,8 @@ function formToTable(formId) {
     creditCardForm: "credit_cards",
     loanForm: "loans",
     goalForm: "goals",
-    quickTemplateForm: "quick_templates"
+    quickTemplateForm: "quick_templates",
+    preferencesForm: "本機偏好"
   }[formId] || formId;
 }
 
@@ -3120,10 +3542,20 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v31 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v40 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
+}
+
+
+function savePreferences(form) {
+  const d = readForm(form);
+  setAppPreference("default_account_expense", d.default_account_expense);
+  setAppPreference("default_account_income", d.default_account_income);
+  setAppPreference("default_account_transfer", d.default_account_transfer);
+  setAppPreference("default_account_refund", d.default_account_refund);
+  return { id: "local" };
 }
 
 async function saveTransaction(form) {
@@ -3179,6 +3611,46 @@ async function saveYear(form) {
   return row;
 }
 
+
+
+async function saveBudgetMovement(form) {
+  const d = readForm(form);
+  if (!d.from_budget_item_id) throw new Error("請選擇來源預算項目");
+  if (!d.to_budget_item_id) throw new Error("請選擇目標預算項目");
+  if (d.from_budget_item_id === d.to_budget_item_id) throw new Error("來源與目標不能相同");
+  if (!d.movement_date) throw new Error("請選擇日期");
+  if (!Number(d.amount)) throw new Error("請輸入金額");
+
+  const payload = {
+    id: d.id || undefined,
+    movement_date: d.movement_date,
+    from_budget_item_id: d.from_budget_item_id,
+    to_budget_item_id: d.to_budget_item_id,
+    amount: numberOrZero(d.amount),
+    movement_type: "manual",
+    note: d.note || null
+  };
+
+  return await upsert("budget_movements", payload, { expect: { amount: payload.amount, movement_type: "manual" } });
+}
+
+async function saveBudgetContribution(form) {
+  const d = readForm(form);
+  if (!d.budget_item_id) throw new Error("請選擇預算項目");
+  if (!d.contribution_date) throw new Error("請選擇提撥日期");
+  if (!Number(d.amount)) throw new Error("請輸入提撥金額");
+
+  const payload = {
+    id: d.id || undefined,
+    budget_item_id: d.budget_item_id,
+    contribution_date: d.contribution_date,
+    amount: numberOrZero(d.amount),
+    note: d.note || null
+  };
+
+  return await upsert("budget_contributions", payload, { expect: { budget_item_id: payload.budget_item_id, amount: payload.amount } });
+}
+
 async function saveBudgetItem(form) {
   const d = readForm(form);
   const payload = {
@@ -3189,6 +3661,8 @@ async function saveBudgetItem(form) {
     item_type: d.item_type || "expense",
     planned_amount: numberOrZero(d.planned_amount),
     period_type: d.period_type || "annual",
+    start_date: d.start_date || null,
+    end_date: d.end_date || null,
     rollover_mode: d.rollover_mode || "none",
     sort_order: Number(d.sort_order || 0),
     is_active: boolValue(d.is_active),
@@ -3382,6 +3856,65 @@ function clearEditing() {
   Object.keys(state.editing).forEach(k => state.editing[k] = null);
 }
 
+
+async function closeYearToNextYear() {
+  const current = getCurrentYearSummary();
+  const currentYear = state.data.years.find(y => y.id === state.selectedYearId) || {};
+  const nextYearNumber = Number(state.selectedBudgetYear) + 1;
+  const existingNext = state.data.years.find(y => Number(y.budget_year) === nextYearNumber);
+
+  const carryover = Math.round(Number(current.remaining_budget || 0));
+  const mode = current.budget_mode || currentYear.budget_mode || "annual_total";
+  const defaultNextAmount = mode === "monthly_contribution"
+    ? Number(current.monthly_budget || currentYear.monthly_budget || 0)
+    : Number(current.annual_budget || currentYear.annual_budget || 0);
+
+  const label = mode === "monthly_contribution" ? "下一年的每次提撥金額" : "下一年的年度預算";
+  const input = window.prompt(
+    `${label}？\n\n結轉金額會固定使用今年剩餘額度：${fmtMoney(carryover)}\n你現在輸入的是「下一年新增預算」，不是結轉金額。`,
+    String(Math.round(defaultNextAmount))
+  );
+
+  if (input === null) return;
+
+  const nextBudgetAmount = Number(String(input).replaceAll(",", "").trim());
+  if (!Number.isFinite(nextBudgetAmount)) {
+    showAlert("結轉失敗：請輸入有效數字。", "bad");
+    return;
+  }
+
+  const nextPayload = {
+    id: existingNext?.id || undefined,
+    budget_year: nextYearNumber,
+    name: existingNext?.name || `${nextYearNumber} 年度預算`,
+    budget_mode: existingNext?.budget_mode || mode,
+    monthly_budget: mode === "monthly_contribution" ? nextBudgetAmount : Number(existingNext?.monthly_budget || 0),
+    budget_start_mode: "record_start",
+    annual_budget: mode === "monthly_contribution" ? nextBudgetAmount * 12 : nextBudgetAmount,
+    carryover_from_previous: carryover,
+    note: existingNext?.note || ""
+  };
+
+  const ok = await confirmAction(
+    "年度結轉",
+    `確定要關閉 ${state.selectedBudgetYear} 年？\n\n${nextYearNumber} 年將使用：\n前期結轉：${fmtMoney(carryover)}\n${label}：${fmtMoney(nextBudgetAmount)}`
+  );
+  if (!ok) return;
+
+  await upsert("years", {
+    ...currentYear,
+    is_closed: true
+  }, { expect: { budget_year: Number(state.selectedBudgetYear) } });
+
+  const next = await upsert("years", nextPayload, { expect: { budget_year: nextYearNumber } });
+
+  state.selectedYearId = next.id;
+  state.selectedBudgetYear = next.budget_year;
+  await loadAll();
+  render();
+  showAlert(`已結轉到 ${nextYearNumber} 年：前期結轉 ${fmtMoney(carryover)}，新增預算 ${fmtMoney(nextBudgetAmount)}。`, "good");
+}
+
 function bindRenderedEvents() {
   $("#recurringForm")?.addEventListener("submit", handleRecurringSubmit);
   $$("form").filter(form => form.getAttribute("id") !== "recurringForm").forEach(form => form.addEventListener("submit", handleSubmit));
@@ -3464,6 +3997,16 @@ function bindRenderedEvents() {
     window.scrollTo({ top: 0, behavior: "smooth" });
     render();
   }));
+  $$("[data-edit-contribution]").forEach(btn => btn.addEventListener("click", () => {
+    state.editing.budgetContribution = state.data.budgetContributions.find(x => x.id === btn.dataset.editContribution);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    render();
+  }));
+  $$("[data-edit-movement]").forEach(btn => btn.addEventListener("click", () => {
+    state.editing.budgetMovement = state.data.budgetMovements.find(x => x.id === btn.dataset.editMovement);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    render();
+  }));
   $$("[data-edit-account]").forEach(btn => btn.addEventListener("click", () => {
     state.editing.account = state.data.accounts.find(x => x.id === btn.dataset.editAccount);
     render();
@@ -3523,23 +4066,15 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v31 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v40 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
   }));
 
   $("#closeYearBtn")?.addEventListener("click", async () => {
-    const ok = await confirmAction("年度結轉", `確定要關閉 ${state.selectedBudgetYear} 年，並把剩餘預算結轉到下一年？`);
-    if (!ok) return;
     try {
-      const { error } = await state.client.rpc("close_year_and_create_next", {
-        p_budget_year: Number(state.selectedBudgetYear),
-        p_create_next: true
-      });
-      if (error) throw new Error(error.message);
-      await loadAll();
-      render();
+      await closeYearToNextYear();
     } catch (error) {
       showAlert(`結轉失敗：${escapeHtml(error.message)}`, "bad");
     }
@@ -3547,6 +4082,7 @@ function bindRenderedEvents() {
 
   $("#exportCsvBtn")?.addEventListener("click", exportCurrentYearCsv);
   $("#exportCashflowCsvBtn")?.addEventListener("click", exportCashflowStatementCsv);
+  $("#exportXlsxBtn")?.addEventListener("click", exportWorkbookXlsx);
   $("#downloadJsonBtn")?.addEventListener("click", downloadCacheJson);
 }
 
@@ -3769,6 +4305,156 @@ function exportCashflowStatementCsv() {
   ];
   downloadFile(`現金流量表_${state.selectedBudgetYear}_Excel_UTF8.csv`, toCsv(rows, headers), "text/csv;charset=utf-8", { bom: true });
   showAlert("已匯出現金流量表 CSV。支出以負數呈現，轉帳只列備查，不影響儲蓄率。", "good");
+}
+
+
+function xmlEscape(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function columnName(index) {
+  let name = "";
+  let n = index + 1;
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    name = String.fromCharCode(65 + rem) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
+}
+
+function sheetXml(rows) {
+  const sheetData = rows.map((row, rIdx) => {
+    const cells = row.map((value, cIdx) => {
+      const cellRef = `${columnName(cIdx)}${rIdx + 1}`;
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return `<c r="${cellRef}"><v>${value}</v></c>`;
+      }
+      return `<c r="${cellRef}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`;
+    }).join("");
+    return `<row r="${rIdx + 1}">${cells}</row>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetData}</sheetData></worksheet>`;
+}
+
+function utf8Bytes(str) {
+  return new TextEncoder().encode(str);
+}
+
+function crc32(bytes) {
+  let c = ~0;
+  for (let i = 0; i < bytes.length; i++) {
+    c ^= bytes[i];
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xEDB88320 & -(c & 1));
+  }
+  return ~c >>> 0;
+}
+
+function writeUInt32LE(arr, value) {
+  arr.push(value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255);
+}
+
+function writeUInt16LE(arr, value) {
+  arr.push(value & 255, (value >>> 8) & 255);
+}
+
+function makeXlsxZip(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+
+  files.forEach(file => {
+    const nameBytes = utf8Bytes(file.name);
+    const dataBytes = utf8Bytes(file.content);
+    const crc = crc32(dataBytes);
+    const local = [];
+    writeUInt32LE(local, 0x04034b50);
+    writeUInt16LE(local, 20); writeUInt16LE(local, 0); writeUInt16LE(local, 0);
+    writeUInt16LE(local, 0); writeUInt16LE(local, 0);
+    writeUInt32LE(local, crc);
+    writeUInt32LE(local, dataBytes.length);
+    writeUInt32LE(local, dataBytes.length);
+    writeUInt16LE(local, nameBytes.length);
+    writeUInt16LE(local, 0);
+    chunks.push(new Uint8Array(local), nameBytes, dataBytes);
+
+    const c = [];
+    writeUInt32LE(c, 0x02014b50);
+    writeUInt16LE(c, 20); writeUInt16LE(c, 20);
+    writeUInt16LE(c, 0); writeUInt16LE(c, 0); writeUInt16LE(c, 0); writeUInt16LE(c, 0);
+    writeUInt32LE(c, crc);
+    writeUInt32LE(c, dataBytes.length);
+    writeUInt32LE(c, dataBytes.length);
+    writeUInt16LE(c, nameBytes.length);
+    writeUInt16LE(c, 0); writeUInt16LE(c, 0); writeUInt16LE(c, 0); writeUInt16LE(c, 0);
+    writeUInt32LE(c, 0); writeUInt32LE(c, offset);
+    central.push(new Uint8Array(c), nameBytes);
+    offset += local.length + nameBytes.length + dataBytes.length;
+  });
+
+  const centralSize = central.reduce((sum, part) => sum + part.length, 0);
+  const end = [];
+  writeUInt32LE(end, 0x06054b50);
+  writeUInt16LE(end, 0); writeUInt16LE(end, 0);
+  writeUInt16LE(end, files.length); writeUInt16LE(end, files.length);
+  writeUInt32LE(end, centralSize);
+  writeUInt32LE(end, offset);
+  writeUInt16LE(end, 0);
+
+  return new Blob([...chunks, ...central, new Uint8Array(end)], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  });
+}
+
+function exportWorkbookXlsx() {
+  const txRows = transactionExportRows(transactionsForSelectedYear()).map(r => [
+    r.date, r.type, r.amount, r.account, r.to_account, r.category, r.budget_item, r.merchant,
+    r.payment_method, r.necessity_level, r.cashflow_nature, r.status, r.note
+  ]);
+  const budgetRows = budgetItemSummariesForSelectedYear().map(r => [
+    r.name, labelOf(r.item_type), r.category_name, r.is_contribution_mode ? "提撥型" : "固定型",
+    Number(r.current_budget_amount || 0), Number(r.actual_amount || 0), Number(r.remaining_amount || 0),
+    Number(r.used_pct || 0), r.funding_label
+  ]);
+  const contributionRows = enrichedBudgetContributionsForSelectedYear().map(r => [
+    r.contribution_date, r.budget_item_name, Number(r.amount || 0), r.note || ""
+  ]);
+  const movementRows = enrichedBudgetMovementsForSelectedYear().map(r => [
+    r.movement_date, r.from_name, r.to_name, Number(r.amount || 0), r.note || ""
+  ]);
+  const cashflowRows = cashflowStatementRows().map(r => [r.section, r.item, r.amount, r.ratio, r.note]);
+
+  const sheets = [
+    { name: "流水帳", rows: [["日期","類型","金額","帳戶","轉入帳戶","分類","預算項目","商家","付款方式","必要程度","現金流性質","狀態","備註"], ...txRows] },
+    { name: "現金流量表", rows: [["區塊","項目","金額","比例","備註"], ...cashflowRows] },
+    { name: "預算項目", rows: [["名稱","類型","分類","模式","目前可用","實際","剩餘","使用率","計算方式"], ...budgetRows] },
+    { name: "預算提撥", rows: [["日期","預算項目","金額","備註"], ...contributionRows] },
+    { name: "預算移轉", rows: [["日期","從","到","金額","備註"], ...movementRows] }
+  ];
+
+  const files = [
+    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>` },
+    { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((s, i) => `<sheet name="${xmlEscape(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets></workbook>` },
+    { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}</Relationships>` },
+    ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, content: sheetXml(s.rows) }))
+  ];
+
+  const blob = makeXlsxZip(files);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `個人財務_${state.selectedBudgetYear}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showAlert("已匯出 Excel .xlsx 工作簿。", "good");
 }
 
 function downloadCacheJson() {
