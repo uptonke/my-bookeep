@@ -1619,3 +1619,15 @@ td.actions { width: 126px; }
     width: 100%;
   }
 }
+
+
+/* v44：月度 / 累積雙視角 */
+.desktop-table td.muted {
+  min-width: 180px;
+}
+
+@media (max-width: 760px) {
+  .mobile-data-meta span:last-child {
+    grid-column: 1 / -1;
+  }
+}

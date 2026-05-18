@@ -559,26 +559,141 @@ function budgetMovementNet(itemId) {
   return budgetMovementInTotal(itemId) - budgetMovementOutTotal(itemId);
 }
 
+
+function currentBudgetMonth() {
+  const now = new Date();
+  const selectedYear = Number(state.selectedBudgetYear);
+  if (selectedYear === now.getFullYear()) return now.getMonth() + 1;
+
+  const txMonths = transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled")
+    .map(t => Number(t.tx_month || 0))
+    .filter(m => m >= 1 && m <= 12);
+
+  const contributionMonths = (state.data.budgetContributions || [])
+    .filter(c => contributionYear(c.contribution_date) === selectedYear)
+    .map(c => Number(String(c.contribution_date || "").slice(5, 7)))
+    .filter(m => m >= 1 && m <= 12);
+
+  const movementMonths = (state.data.budgetMovements || [])
+    .filter(m => contributionYear(m.movement_date) === selectedYear)
+    .map(m => Number(String(m.movement_date || "").slice(5, 7)))
+    .filter(m => m >= 1 && m <= 12);
+
+  const months = [...txMonths, ...contributionMonths, ...movementMonths];
+  return months.length ? Math.max(...months) : 12;
+}
+
+function isCurrentBudgetMonth(dateValue) {
+  if (!dateValue) return false;
+  return contributionYear(dateValue) === Number(state.selectedBudgetYear)
+    && Number(String(dateValue).slice(5, 7)) === currentBudgetMonth();
+}
+
+function txRowsForBudgetItem(itemId) {
+  return transactionsForSelectedYear()
+    .filter(t => t.status !== "cancelled")
+    .filter(t => t.budget_item_id === itemId);
+}
+
+function actualForBudgetItem(item, scope = "year") {
+  return txRowsForBudgetItem(item.id || item.budget_item_id).reduce((sum, t) => {
+    if (scope === "month" && Number(t.tx_month || 0) !== currentBudgetMonth()) return sum;
+    if (item.item_type === "expense" && t.type === "refund") return sum - Number(t.amount || 0);
+    if (t.type === item.item_type) return sum + Number(t.amount || 0);
+    return sum;
+  }, 0);
+}
+
+function contributionsForBudgetItemInScope(itemId, scope = "year") {
+  return contributionsForBudgetItem(itemId)
+    .filter(c => scope !== "month" || isCurrentBudgetMonth(c.contribution_date));
+}
+
+function budgetContributionTotalInScope(itemId, scope = "year") {
+  return contributionsForBudgetItemInScope(itemId, scope).reduce((sum, c) => sum + Number(c.amount || 0), 0);
+}
+
+function budgetContributionCountInScope(itemId, scope = "year") {
+  return contributionsForBudgetItemInScope(itemId, scope).length;
+}
+
+function movementsForBudgetItemInScope(itemId, scope = "year") {
+  return movementsForBudgetItem(itemId)
+    .filter(m => scope !== "month" || isCurrentBudgetMonth(m.movement_date));
+}
+
+function budgetMovementInTotalInScope(itemId, scope = "year") {
+  return movementsForBudgetItemInScope(itemId, scope)
+    .filter(m => m.to_budget_item_id === itemId)
+    .reduce((sum, m) => sum + Number(m.amount || 0), 0);
+}
+
+function budgetMovementOutTotalInScope(itemId, scope = "year") {
+  return movementsForBudgetItemInScope(itemId, scope)
+    .filter(m => m.from_budget_item_id === itemId)
+    .reduce((sum, m) => sum + Number(m.amount || 0), 0);
+}
+
+function budgetMovementNetInScope(itemId, scope = "year") {
+  return budgetMovementInTotalInScope(itemId, scope) - budgetMovementOutTotalInScope(itemId, scope);
+}
+
+function budgetAvailableForScope(item, scope = "year") {
+  const itemId = item.id || item.budget_item_id;
+  const movementNet = budgetMovementNetInScope(itemId, scope);
+
+  if (budgetIsContributionMode(item)) {
+    return budgetContributionTotalInScope(itemId, scope) + movementNet;
+  }
+
+  if (scope === "month" && item.period_type === "monthly") {
+    return Number(item.planned_amount || 0) + movementNet;
+  }
+
+  return Number(item.planned_amount || 0) + movementNet;
+}
+
+function budgetPrimaryScope(item) {
+  return item?.period_type === "monthly" ? "month" : "year";
+}
+
+function budgetScopeLabel(scope) {
+  return scope === "month" ? `${currentBudgetMonth()}月` : "年度累積";
+}
+
 function budgetItemSummariesForSelectedYear() {
-  const txRows = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
   return (state.data.budgetItems || [])
     .filter(i => i.year_id === state.selectedYearId)
     .map(i => {
       const category = state.data.categories.find(c => c.id === i.category_id) || {};
-      const actual_amount = txRows.reduce((sum, t) => {
-        if (t.budget_item_id !== i.id) return sum;
-        if (i.item_type === "expense" && t.type === "refund") return sum - Number(t.amount || 0);
-        if (t.type === i.item_type) return sum + Number(t.amount || 0);
-        return sum;
-      }, 0);
       const planned_amount = Number(i.planned_amount || 0);
       const is_contribution_mode = budgetIsContributionMode(i);
-      const contribution_count = is_contribution_mode ? budgetContributionCountActual(i.id) : budgetContributionCount(i);
-      const contribution_total = is_contribution_mode ? budgetContributionTotal(i.id) : 0;
-      const movement_in = budgetMovementInTotal(i.id);
-      const movement_out = budgetMovementOutTotal(i.id);
-      const movement_net = movement_in - movement_out;
-      const current_budget_amount = budgetCurrentAvailableAmount(i);
+      const primary_scope = budgetPrimaryScope(i);
+
+      const year_contribution_count = is_contribution_mode ? budgetContributionCountInScope(i.id, "year") : budgetContributionCount(i);
+      const month_contribution_count = is_contribution_mode ? budgetContributionCountInScope(i.id, "month") : 0;
+      const year_contribution_total = is_contribution_mode ? budgetContributionTotalInScope(i.id, "year") : 0;
+      const month_contribution_total = is_contribution_mode ? budgetContributionTotalInScope(i.id, "month") : 0;
+
+      const year_movement_in = budgetMovementInTotalInScope(i.id, "year");
+      const year_movement_out = budgetMovementOutTotalInScope(i.id, "year");
+      const year_movement_net = year_movement_in - year_movement_out;
+      const month_movement_in = budgetMovementInTotalInScope(i.id, "month");
+      const month_movement_out = budgetMovementOutTotalInScope(i.id, "month");
+      const month_movement_net = month_movement_in - month_movement_out;
+
+      const year_budget_amount = budgetAvailableForScope(i, "year");
+      const month_budget_amount = budgetAvailableForScope(i, "month");
+      const year_actual_amount = actualForBudgetItem(i, "year");
+      const month_actual_amount = actualForBudgetItem(i, "month");
+      const year_remaining_amount = year_budget_amount - year_actual_amount;
+      const month_remaining_amount = month_budget_amount - month_actual_amount;
+
+      const current_budget_amount = primary_scope === "month" ? month_budget_amount : year_budget_amount;
+      const actual_amount = primary_scope === "month" ? month_actual_amount : year_actual_amount;
+      const remaining_amount = current_budget_amount - actual_amount;
+
       return {
         ...i,
         budget_item_id: i.id,
@@ -586,18 +701,47 @@ function budgetItemSummariesForSelectedYear() {
         category_name: category.name || "",
         category_type: category.type || "",
         planned_amount,
-        contribution_count,
-        contribution_total,
-        movement_in,
-        movement_out,
-        movement_net,
+        primary_scope,
+        scope_label: budgetScopeLabel(primary_scope),
+        current_month: currentBudgetMonth(),
+
+        contribution_count: primary_scope === "month" ? month_contribution_count : year_contribution_count,
+        contribution_total: primary_scope === "month" ? month_contribution_total : year_contribution_total,
+        year_contribution_count,
+        month_contribution_count,
+        year_contribution_total,
+        month_contribution_total,
+
+        movement_in: primary_scope === "month" ? month_movement_in : year_movement_in,
+        movement_out: primary_scope === "month" ? month_movement_out : year_movement_out,
+        movement_net: primary_scope === "month" ? month_movement_net : year_movement_net,
+        year_movement_in,
+        year_movement_out,
+        year_movement_net,
+        month_movement_in,
+        month_movement_out,
+        month_movement_net,
+
         is_contribution_mode,
         current_budget_amount,
-        funding_label: budgetFundingLabel({ ...i, planned_amount }),
-        available_label: budgetAvailableLabel({ ...i, planned_amount, current_budget_amount }),
         actual_amount,
-        remaining_amount: current_budget_amount - actual_amount,
-        used_pct: current_budget_amount ? Math.round(actual_amount / current_budget_amount * 10000) / 100 : 0
+        remaining_amount,
+        used_pct: current_budget_amount ? Math.round(actual_amount / current_budget_amount * 10000) / 100 : 0,
+
+        month_budget_amount,
+        month_actual_amount,
+        month_remaining_amount,
+        month_used_pct: month_budget_amount ? Math.round(month_actual_amount / month_budget_amount * 10000) / 100 : 0,
+
+        year_budget_amount,
+        year_actual_amount,
+        year_remaining_amount,
+        year_used_pct: year_budget_amount ? Math.round(year_actual_amount / year_budget_amount * 10000) / 100 : 0,
+
+        funding_label: budgetFundingLabel({ ...i, planned_amount }),
+        available_label: primary_scope === "month"
+          ? `${currentBudgetMonth()}月可用 ${fmtMoney(month_budget_amount)}`
+          : budgetAvailableLabel({ ...i, planned_amount, current_budget_amount: year_budget_amount })
       };
     })
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name)));
@@ -1521,9 +1665,16 @@ function markMonthCloseAsked(date = new Date()) {
 
 function monthCloseSourceRows() {
   return budgetItemSummariesForSelectedYear()
-    .filter(r => Number(r.remaining_amount || 0) > 0)
-    .filter(r => !r.is_contribution_mode)
     .filter(r => (r.period_type || "annual") === "monthly")
+    .filter(r => Number(r.month_remaining_amount ?? r.remaining_amount ?? 0) > 0)
+    .map(r => ({
+      ...r,
+      remaining_amount: Number(r.month_remaining_amount ?? r.remaining_amount ?? 0),
+      current_budget_amount: Number(r.month_budget_amount ?? r.current_budget_amount ?? 0),
+      actual_amount: Number(r.month_actual_amount ?? r.actual_amount ?? 0),
+      primary_scope: "month",
+      scope_label: `${currentBudgetMonth()}月`
+    }))
     .sort((a, b) => Number(b.remaining_amount || 0) - Number(a.remaining_amount || 0));
 }
 
@@ -1573,7 +1724,7 @@ async function runMonthCloseSweepPrompt({ auto = false } = {}) {
     }
 
     const sourceInput = window.prompt(
-      `手動分配結餘：選擇要從哪個固定型月預算項目分配結餘。\n\n${numberedPromptList(sources, r => `${r.name}｜剩餘 ${fmtMoney(r.remaining_amount)}`)}\n\n輸入編號；取消或空白 = 不處理`,
+      `手動分配結餘：選擇要從哪個每月預算項目分配 ${currentBudgetMonth()} 月結餘。\n\n${numberedPromptList(sources, r => `${r.name}｜剩餘 ${fmtMoney(r.remaining_amount)}`)}\n\n輸入編號；取消或空白 = 不處理`,
       "1"
     );
     if (!sourceInput) {
@@ -1609,7 +1760,7 @@ async function runMonthCloseSweepPrompt({ auto = false } = {}) {
     }
 
     const amountInput = window.prompt(
-      `要移轉多少？\n\n來源：${source.name}\n目標：${target.name}\n可移轉上限：${fmtMoney(source.remaining_amount)}\n\n用預設金額 = 把這個項目剩餘額度清空。`,
+      `要移轉多少？\n\n來源：${source.name}\n目標：${target.name}\n可移轉上限：${fmtMoney(source.remaining_amount)}\n\n用預設金額 = 把這個項目的 ${currentBudgetMonth()} 月剩餘額度清空。`,
       String(Math.round(Number(source.remaining_amount || 0)))
     );
     if (!amountInput) {
@@ -1739,7 +1890,7 @@ function renderBudget() {
         <h3>預算項目</h3>
         <span class="badge">${items.length} 項</span>
       </div>
-      <p class="metric-sub">先看每個項目的「目前可用 / 實際 / 剩餘 / 使用率」。若期間選每月或每週、結轉模式選餘額結轉，會改用「實際提撥紀錄累積 − 已花費」計算。</p>
+      <p class="metric-sub">每月項目主表改看「本月可用 / 本月實際 / 本月剩餘」；年度與自訂項目看年度累積。累積資訊仍保留在右側欄位，避免日常花費數字越滾越大。</p>
       ${renderBudgetItemTable(items)}
     </div>
 
@@ -1825,23 +1976,24 @@ function renderBudgetItemTable(rows) {
     <div class="mobile-card-list">
       ${rows.map(i => {
         const pct = Number(i.used_pct || 0);
+        const isMonth = i.primary_scope === "month";
         return `
           <div class="mobile-data-card">
             <div class="mobile-data-head">
               <div>
                 <strong>${escapeHtml(i.name)}</strong>
-                <span>${escapeHtml(labelOf(i.item_type))} · ${escapeHtml(i.category_name || "未分類")}</span>
+                <span>${escapeHtml(labelOf(i.item_type))} · ${escapeHtml(i.category_name || "未分類")} · ${escapeHtml(i.scope_label)}</span>
               </div>
               <div class="mobile-amount">${fmtMoney(i.current_budget_amount)}</div>
             </div>
             <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
             <div class="mobile-data-meta">
               <span>${escapeHtml(i.is_contribution_mode ? "提撥型" : "固定型")}</span>
-              <span>${escapeHtml(i.funding_label)}</span>
-              ${i.movement_net ? `<span>移轉淨額 ${fmtMoney(i.movement_net)}</span>` : ""}
+              <span>${escapeHtml(isMonth ? `${i.current_month}月視角` : "年度視角")}</span>
               <span>實際 ${fmtMoney(i.actual_amount)}</span>
               <span>${Number(i.remaining_amount || 0) >= 0 ? `剩餘 ${fmtMoney(i.remaining_amount)}` : `超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
               <span>${fmtNumber(pct, 1)}%</span>
+              ${isMonth ? `<span>年度累積：可用 ${fmtMoney(i.year_budget_amount)} / 實際 ${fmtMoney(i.year_actual_amount)} / 剩餘 ${fmtMoney(i.year_remaining_amount)}</span>` : ""}
             </div>
             <div class="mobile-card-actions">
               <button class="btn small secondary" type="button" data-edit-budget="${i.budget_item_id}">編輯</button>
@@ -1856,10 +2008,11 @@ function renderBudgetItemTable(rows) {
   const tableView = `
     <div class="table-wrap desktop-table">
       <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>分類</th><th>計算方式</th><th>目前可用</th><th>實際</th><th>剩餘</th><th>使用率</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>可用</th><th>實際</th><th>剩餘</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
         <tbody>
           ${rows.map(i => {
             const pct = Number(i.used_pct || 0);
+            const isMonth = i.primary_scope === "month";
             return `
               <tr>
                 <td>${escapeHtml(i.name)}</td>
@@ -1867,14 +2020,18 @@ function renderBudgetItemTable(rows) {
                 <td>${escapeHtml(i.category_name || "")}</td>
                 <td>
                   <span class="badge">${escapeHtml(i.is_contribution_mode ? "提撥型" : "固定型")}</span>
-                  <div class="muted">${escapeHtml(i.funding_label)}${i.movement_net ? `｜移轉淨額 ${fmtMoney(i.movement_net)}` : ""}</div>
+                  <div class="muted">${escapeHtml(i.funding_label)}${i.movement_net ? `｜本視角移轉淨額 ${fmtMoney(i.movement_net)}` : ""}</div>
                 </td>
+                <td><span class="badge">${escapeHtml(i.scope_label)}</span></td>
                 <td class="mono">${fmtMoney(i.current_budget_amount)}</td>
                 <td class="mono bad">${fmtMoney(i.actual_amount)}</td>
                 <td class="mono ${Number(i.remaining_amount || 0) >= 0 ? "good" : "bad"}">${fmtMoney(i.remaining_amount)}</td>
                 <td>
                   <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
                   <span class="muted">${fmtNumber(pct, 1)}%</span>
+                </td>
+                <td class="muted">
+                  ${isMonth ? `年度：可用 ${fmtMoney(i.year_budget_amount)}｜實際 ${fmtMoney(i.year_actual_amount)}｜剩餘 ${fmtMoney(i.year_remaining_amount)}` : "—"}
                 </td>
                 <td class="actions">
                   <button class="btn small secondary" data-edit-budget="${i.budget_item_id}">編輯</button>
@@ -3728,7 +3885,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v43 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v44 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3767,7 +3924,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v43 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v44 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4435,7 +4592,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v43 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v44 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
