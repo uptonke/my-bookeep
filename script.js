@@ -1419,14 +1419,16 @@ function renderTransactions() {
       </form>
     </div>
 
-    <div class="card">
-      <div class="card-title-row">
-        <h3>最近交易</h3>
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>最近交易（點擊展開 / 收合）</span>
         <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderTxFilters()}
+        ${renderTxTable(rows)}
       </div>
-      ${renderTxFilters()}
-      ${renderTxTable(rows)}
-    </div>
+    </details>
   `;
 }
 
@@ -1580,13 +1582,15 @@ function renderBudgetContributionSection(items) {
       </form>
     </div>
 
-    <div class="card">
-      <div class="card-title-row">
-        <h3>提撥紀錄</h3>
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>提撥紀錄（點擊展開 / 收合）</span>
         <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetContributionTable(rows)}
       </div>
-      ${renderBudgetContributionTable(rows)}
-    </div>
+    </details>
   `;
 }
 
@@ -1684,13 +1688,15 @@ function renderBudgetMovementSection() {
       </form>
     </div>
 
-    <div class="card">
-      <div class="card-title-row">
-        <h3>預算移轉紀錄</h3>
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>預算移轉紀錄（點擊展開 / 收合）</span>
         <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetMovementTable(rows)}
       </div>
-      ${renderBudgetMovementTable(rows)}
-    </div>
+    </details>
   `;
 }
 
@@ -4181,7 +4187,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v46.1 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v47.1 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4220,7 +4226,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v46.1 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v47.1 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4981,7 +4987,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v46.1 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v47.1 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }

@@ -1661,3 +1661,82 @@ td.actions { width: 126px; }
 .btn.danger:hover {
   background: rgba(244, 63, 94, 0.24);
 }
+
+
+/* v47：可收疊紀錄區 */
+.collapsible-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.collapsible-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  font-weight: 800;
+}
+
+.collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-summary::after {
+  content: "展開";
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.collapsible-card[open] > .collapsible-summary::after {
+  content: "收合";
+}
+
+.collapsible-body {
+  padding: 0 20px 20px;
+}
+
+@media (max-width: 760px) {
+  .collapsible-summary {
+    padding: 16px;
+  }
+
+  .collapsible-body {
+    padding: 0 16px 16px;
+  }
+}
+
+
+/* v47.1：更明顯的可收疊紀錄區 */
+.collapsible-card:not([open]) {
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.72));
+  border-style: dashed;
+}
+
+.collapsible-card:not([open]) .collapsible-body {
+  display: none;
+}
+
+.collapsible-summary {
+  user-select: none;
+}
+
+.collapsible-summary > span:first-child::before {
+  content: "▸ ";
+  color: #60a5fa;
+}
+
+.collapsible-card[open] > .collapsible-summary > span:first-child::before {
+  content: "▾ ";
+}
+
+.collapsible-summary::after {
+  min-width: 42px;
+  text-align: center;
+}
