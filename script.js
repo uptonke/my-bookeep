@@ -495,6 +495,25 @@ function budgetContributionCount(item) {
   return 1;
 }
 
+
+function contributionYear(dateValue) {
+  return dateValue ? Number(String(dateValue).slice(0, 4)) : null;
+}
+
+function contributionsForBudgetItem(itemId) {
+  return (state.data.budgetContributions || [])
+    .filter(c => c.budget_item_id === itemId)
+    .filter(c => contributionYear(c.contribution_date) === Number(state.selectedBudgetYear));
+}
+
+function budgetContributionTotal(itemId) {
+  return contributionsForBudgetItem(itemId).reduce((sum, c) => sum + Number(c.amount || 0), 0);
+}
+
+function budgetContributionCountActual(itemId) {
+  return contributionsForBudgetItem(itemId).length;
+}
+
 function budgetCurrentAvailableAmount(item) {
   const movementNet = budgetMovementNet(item.id || item.budget_item_id);
   if (budgetIsContributionMode(item)) return budgetContributionTotal(item.id || item.budget_item_id) + movementNet;
@@ -3525,7 +3544,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v41 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v41.1 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3564,7 +3583,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v41 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v41.1 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4230,7 +4249,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v41 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v41.1 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
