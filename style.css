@@ -1583,3 +1583,39 @@ td.actions { width: 126px; }
     font-size: 13px;
   }
 }
+
+
+/* v43：手動分配結餘 */
+.month-close-box {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 22px;
+  background: rgba(15, 23, 42, 0.28);
+  display: grid;
+  gap: 14px;
+}
+
+.month-close-box h4 {
+  margin: 0 0 6px;
+}
+
+.month-close-box .btn-row {
+  justify-content: flex-start;
+}
+
+@media (max-width: 760px) {
+  .month-close-box {
+    border-radius: 20px;
+    padding: 14px;
+  }
+
+  .month-close-box .btn-row {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .month-close-box .btn {
+    width: 100%;
+  }
+}

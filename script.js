@@ -1496,6 +1496,179 @@ function renderBudgetMovementTable(rows) {
   return `${mobileCards}${tableView}`;
 }
 
+
+function monthEndKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function daysLeftInMonth(date = new Date()) {
+  const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  return lastDay - date.getDate();
+}
+
+function isMonthEndWindow(date = new Date()) {
+  // 不做背景推播；使用者在不會自動跳出、不會自動分類；你按按鈕後才會開始分配。
+  return daysLeftInMonth(date) <= 2;
+}
+
+function monthCloseAlreadyAsked(date = new Date()) {
+  return appPreference(`month_close_asked_${monthEndKey(date)}`, "") === "1";
+}
+
+function markMonthCloseAsked(date = new Date()) {
+  setAppPreference(`month_close_asked_${monthEndKey(date)}`, "1");
+}
+
+function monthCloseSourceRows() {
+  return budgetItemSummariesForSelectedYear()
+    .filter(r => Number(r.remaining_amount || 0) > 0)
+    .filter(r => !r.is_contribution_mode)
+    .filter(r => (r.period_type || "annual") === "monthly")
+    .sort((a, b) => Number(b.remaining_amount || 0) - Number(a.remaining_amount || 0));
+}
+
+function monthCloseTargetRows(sourceId = "") {
+  return budgetItemSummariesForSelectedYear()
+    .filter(r => r.budget_item_id !== sourceId)
+    .filter(r => r.is_active !== false)
+    .sort((a, b) => {
+      // 提撥型優先當目標，其次照剩餘額度與名稱排序。
+      if (a.is_contribution_mode !== b.is_contribution_mode) return a.is_contribution_mode ? -1 : 1;
+      return (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name));
+    });
+}
+
+function numberedPromptList(rows, labelFn) {
+  return rows.map((r, idx) => `${idx + 1}. ${labelFn(r)}`).join("\n");
+}
+
+function pickByNumber(input, rows) {
+  const n = Number(String(input || "").trim());
+  if (!Number.isInteger(n) || n < 1 || n > rows.length) return null;
+  return rows[n - 1];
+}
+
+async function createMonthCloseMovement(source, target, amount, note = "") {
+  const payload = {
+    movement_date: today(),
+    from_budget_item_id: source.budget_item_id,
+    to_budget_item_id: target.budget_item_id,
+    amount: Math.max(0, Number(amount || 0)),
+    movement_type: "manual",
+    note: note || `手動分配結餘：${source.name} → ${target.name}`
+  };
+  if (!payload.amount) throw new Error("移轉金額不可為 0");
+  return await upsert("budget_movements", payload, { expect: { amount: payload.amount, movement_type: "manual" } });
+}
+
+async function runMonthCloseSweepPrompt({ auto = false } = {}) {
+  if (state.monthClosePromptRunning) return;
+  state.monthClosePromptRunning = true;
+
+  try {
+    const sources = monthCloseSourceRows();
+    if (!sources.length) {
+      if (!auto) showAlert("沒有可掃出的固定型月預算結餘。", "warn");
+      return;
+    }
+
+    const sourceInput = window.prompt(
+      `手動分配結餘：選擇要從哪個固定型月預算項目分配結餘。\n\n${numberedPromptList(sources, r => `${r.name}｜剩餘 ${fmtMoney(r.remaining_amount)}`)}\n\n輸入編號；取消或空白 = 不處理`,
+      "1"
+    );
+    if (!sourceInput) {
+      if (auto) markMonthCloseAsked();
+      return;
+    }
+
+    const source = pickByNumber(sourceInput, sources);
+    if (!source) {
+      showAlert("手動分配結餘取消：來源編號無效。", "bad");
+      return;
+    }
+
+    const targets = monthCloseTargetRows(source.budget_item_id);
+    if (!targets.length) {
+      showAlert("沒有可移入的目標預算項目。", "bad");
+      return;
+    }
+
+    const targetInput = window.prompt(
+      `要把「${source.name}」剩餘 ${fmtMoney(source.remaining_amount)} 移到哪裡？\n\n${numberedPromptList(targets, r => `${r.name}${r.is_contribution_mode ? "｜提撥型" : "｜固定型"}｜目前可用 ${fmtMoney(r.current_budget_amount)}`)}\n\n輸入編號；取消或空白 = 不處理`,
+      "1"
+    );
+    if (!targetInput) {
+      if (auto) markMonthCloseAsked();
+      return;
+    }
+
+    const target = pickByNumber(targetInput, targets);
+    if (!target) {
+      showAlert("手動分配結餘取消：目標編號無效。", "bad");
+      return;
+    }
+
+    const amountInput = window.prompt(
+      `要移轉多少？\n\n來源：${source.name}\n目標：${target.name}\n可移轉上限：${fmtMoney(source.remaining_amount)}\n\n用預設金額 = 把這個項目剩餘額度清空。`,
+      String(Math.round(Number(source.remaining_amount || 0)))
+    );
+    if (!amountInput) {
+      if (auto) markMonthCloseAsked();
+      return;
+    }
+
+    const amount = Number(String(amountInput).replaceAll(",", "").trim());
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showAlert("手動分配結餘取消：金額無效。", "bad");
+      return;
+    }
+    if (amount > Number(source.remaining_amount || 0)) {
+      showAlert(`手動分配結餘取消：金額不可超過來源剩餘 ${fmtMoney(source.remaining_amount)}。`, "bad");
+      return;
+    }
+
+    const ok = await confirmAction(
+      "確認手動分配結餘",
+      `確定要把 ${fmtMoney(amount)} 從「${source.name}」移到「${target.name}」？\n\n這會新增一筆預算移轉，不會新增收入或支出；若金額等於來源剩餘，來源額度會被清空。`
+    );
+    if (!ok) {
+      if (auto) markMonthCloseAsked();
+      return;
+    }
+
+    await createMonthCloseMovement(source, target, amount);
+    markMonthCloseAsked();
+    await loadAll();
+    render();
+    showAlert(`已完成手動分配結餘：${source.name} → ${target.name}，${fmtMoney(amount)}。`, "good", { timeout: 6000 });
+  } catch (error) {
+    showAlert(`手動分配結餘失敗：${escapeHtml(error.message)}`, "bad");
+  } finally {
+    state.monthClosePromptRunning = false;
+  }
+}
+
+function maybeAutoAskMonthCloseSweep() {
+  if (!isMonthEndWindow()) return;
+  if (monthCloseAlreadyAsked()) return;
+  if (!monthCloseSourceRows().length) return;
+
+  // 避免初次載入時阻塞畫面，等 render 完再問。
+  setTimeout(() => {
+    if (!monthCloseAlreadyAsked()) runMonthCloseSweepPrompt({ auto: true });
+  }, 800);
+}
+
+function renderMonthCloseSweepSuggestions() {
+  const sources = monthCloseSourceRows().slice(0, 6);
+  if (!sources.length) return `<p class="metric-sub">目前沒有可掃出的固定型月預算結餘。</p>`;
+  return `
+    <ul class="plain-list">
+      ${sources.map(r => `<li>${escapeHtml(r.name)}：可掃出 ${fmtMoney(r.remaining_amount)}</li>`).join("")}
+    </ul>
+  `;
+}
+
 function renderMonthCloseAdvisor() {
   const rows = budgetItemSummariesForSelectedYear();
   const overspent = rows.filter(r => Number(r.remaining_amount || 0) < 0).sort((a, b) => Number(a.remaining_amount) - Number(b.remaining_amount));
@@ -1529,6 +1702,17 @@ function renderMonthCloseAdvisor() {
         <div>
           <h4>可挪用的預算</h4>
           ${surplus.length ? `<ul class="plain-list">${surplus.map(r => `<li>${escapeHtml(r.name)}：剩餘 ${fmtMoney(r.remaining_amount)}</li>`).join("")}</ul>` : `<p class="metric-sub">目前沒有明顯可挪用 envelope。</p>`}
+        </div>
+      </div>
+
+      <div class="month-close-box">
+        <div>
+          <h4>手動分配結餘</h4>
+          <p class="metric-sub">不會自動跳出、不會自動分類；你按按鈕後才會開始分配。系統會把固定型月預算的未用結餘移到指定 envelope，不會新增收入或支出。</p>
+          ${renderMonthCloseSweepSuggestions()}
+        </div>
+        <div class="btn-row">
+          <button class="btn secondary" type="button" id="runMonthCloseSweepBtn">手動分配結餘</button>
         </div>
       </div>
     </div>
@@ -3544,7 +3728,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v41.1 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v43 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3583,7 +3767,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v41.1 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v43 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4128,6 +4312,8 @@ function bindRenderedEvents() {
     render();
   });
 
+  $("#runMonthCloseSweepBtn")?.addEventListener("click", () => runMonthCloseSweepPrompt({ auto: false }));
+
   $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
 
   $$("[data-cancel-edit]").forEach(btn => btn.addEventListener("click", () => {
@@ -4249,7 +4435,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v41.1 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v43 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
