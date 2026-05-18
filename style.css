@@ -1638,3 +1638,9 @@ td.actions { width: 126px; }
   border-color: rgba(45, 212, 191, 0.25);
   background: rgba(20, 184, 166, 0.08);
 }
+
+
+/* v45.1：年度結轉提示 */
+.warn-text {
+  color: #fbbf24;
+}

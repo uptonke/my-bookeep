@@ -1864,6 +1864,21 @@ function annualRolloverRows() {
     .sort((a, b) => Number(b.year_remaining_amount ?? b.remaining_amount ?? 0) - Number(a.year_remaining_amount ?? a.remaining_amount ?? 0));
 }
 
+function annualRolloverDiagnostics() {
+  const items = budgetItemSummariesForSelectedYear();
+  const annualCarry = items.filter(r => r.is_annual_rollover_mode);
+  const annualCarryNoRemaining = annualCarry.filter(r => Number(r.year_remaining_amount ?? r.remaining_amount ?? 0) <= 0);
+  const notAnnualCarry = items.filter(r => !r.is_annual_rollover_mode);
+  return {
+    total: items.length,
+    eligible: annualRolloverRows().length,
+    annualCarry: annualCarry.length,
+    annualCarryNoRemaining: annualCarryNoRemaining.length,
+    notAnnualCarry: notAnnualCarry.length,
+    notAnnualCarryNames: notAnnualCarry.slice(0, 8).map(r => `${r.name}（${labelOf(r.period_type)} + ${labelOf(r.rollover_mode)}）`)
+  };
+}
+
 function budgetAllocationSummary() {
   const current = getCurrentYearSummary();
   const items = budgetItemSummariesForSelectedYear();
@@ -1958,19 +1973,38 @@ async function upsertRolloverContribution(nextItem, amount, fromYear) {
 }
 
 async function rolloverAnnualBudgetItemsToNextYear() {
+  showAlert("正在檢查年度結轉型項目…", "warn");
   const rows = annualRolloverRows();
+  const diag = annualRolloverDiagnostics();
+
   if (!rows.length) {
-    showAlert("沒有可結轉的年度結轉型預算項目。", "warn");
+    const msg = [
+      "沒有可結轉的年度結轉型預算項目。",
+      "",
+      "可結轉條件：",
+      "1. 期間 = 每年",
+      "2. 結轉模式 = 餘額結轉",
+      "3. 今年剩餘額度 > 0",
+      "",
+      `目前：年度結轉型 ${diag.annualCarry} 項，其中剩餘 > 0 的有 ${diag.eligible} 項。`,
+      diag.notAnnualCarryNames.length ? `非年度結轉型範例：${diag.notAnnualCarryNames.join("、")}` : ""
+    ].filter(Boolean).join("\n");
+
+    await confirmAction("不能結轉", msg);
+    showAlert("沒有可結轉項目：請先把出國 / Live Music 等項目設成「每年 + 餘額結轉」，且今年剩餘要大於 0。", "warn", { sticky: true });
     return;
   }
 
   const nextYearNumber = Number(state.selectedBudgetYear) + 1;
-  const summary = rows.map(r => `${r.name}：${fmtMoney(r.year_remaining_amount ?? r.remaining_amount)}`).join("\\n");
+  const summary = rows.map(r => `${r.name}：${fmtMoney(r.year_remaining_amount ?? r.remaining_amount)}`).join("\n");
   const ok = await confirmAction(
     "年度結轉型 Envelope",
-    `確定要把以下項目的今年剩餘額度結轉到 ${nextYearNumber} 年？\\n\\n${summary}\\n\\n這會在下一年建立同名預算項目，並新增/更新一筆「${state.selectedBudgetYear} 年度結轉」提撥。下一年的實際花費會自然從 0 開始。`
+    `確定要把以下項目的今年剩餘額度結轉到 ${nextYearNumber} 年？\n\n${summary}\n\n這會在下一年建立同名預算項目，並新增/更新一筆「${state.selectedBudgetYear} 年度結轉」提撥。下一年的實際花費會自然從 0 開始。`
   );
-  if (!ok) return;
+  if (!ok) {
+    showAlert("已取消年度結轉。", "warn");
+    return;
+  }
 
   const nextYear = await ensureBudgetYearForNumber(nextYearNumber);
   let count = 0;
@@ -1984,18 +2018,27 @@ async function rolloverAnnualBudgetItemsToNextYear() {
   }
 
   await loadAll();
+
+  const refreshedNextYear = state.data.years.find(y => Number(y.budget_year) === nextYearNumber) || nextYear;
+  if (refreshedNextYear?.id) {
+    state.selectedYearId = refreshedNextYear.id;
+    state.selectedBudgetYear = refreshedNextYear.budget_year;
+  }
+
   render();
-  showAlert(`已結轉 ${count} 個年度結轉型預算項目到 ${nextYearNumber} 年。`, "good", { timeout: 6000 });
+  showAlert(`已結轉 ${count} 個年度結轉型預算項目到 ${nextYearNumber} 年，並切換到 ${nextYearNumber} 年。`, "good", { timeout: 8000 });
 }
 
 function renderAnnualRolloverCard() {
   const rows = annualRolloverRows();
+  const diag = annualRolloverDiagnostics();
   return `
     <div class="month-close-box annual-rollover-box">
       <div>
         <h4>年度結轉型 Envelope</h4>
-        <p class="metric-sub">適用於「每年 + 餘額結轉」。可用額度跨年承接，但實際花費按年度歸零。例：出國、Live Music、高端餐飲、單口喜劇。</p>
-        ${rows.length ? `<ul class="plain-list">${rows.slice(0, 8).map(r => `<li>${escapeHtml(r.name)}：今年剩餘 ${fmtMoney(r.year_remaining_amount ?? r.remaining_amount)}</li>`).join("")}</ul>` : `<p class="metric-sub">目前沒有可結轉的年度結轉型項目。</p>`}
+        <p class="metric-sub">不用等到下一年。只要目前選的是 ${state.selectedBudgetYear}，按下後就會建立 / 更新 ${Number(state.selectedBudgetYear) + 1} 年的同名預算項目。可結轉條件：期間 = 每年、結轉模式 = 餘額結轉、今年剩餘 > 0。</p>
+        <p class="metric-sub">目前符合條件：${diag.eligible} 項；年度結轉型總數：${diag.annualCarry} 項。</p>
+        ${rows.length ? `<ul class="plain-list">${rows.slice(0, 8).map(r => `<li>${escapeHtml(r.name)}：今年剩餘 ${fmtMoney(r.year_remaining_amount ?? r.remaining_amount)}</li>`).join("")}</ul>` : `<p class="metric-sub warn-text">目前沒有可結轉項目。請先把出國 / Live Music / 單口喜劇 / 高端餐飲設成「每年 + 餘額結轉」，且今年剩餘要大於 0。</p>`}
       </div>
       <div class="btn-row">
         <button class="btn secondary" type="button" id="rolloverAnnualItemsBtn">結轉年度型項目到下一年</button>
@@ -4073,7 +4116,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v45 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v45.1 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4112,7 +4155,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v45 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v45.1 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4787,7 +4830,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v45 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v45.1 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
