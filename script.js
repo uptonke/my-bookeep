@@ -2218,6 +2218,7 @@ function renderBudget() {
               <button class="btn" type="submit">儲存年度</button>
               <button class="btn secondary" type="button" data-edit-year="${state.selectedYearId}">載入目前年度編輯</button>
               <button class="btn secondary" type="button" id="closeYearBtn">結轉到下一年</button>
+              ${editYear ? `<button class="btn danger" type="button" data-delete="years:${editYear.id}">刪除年度</button>` : ""}
               ${editYear ? `<button class="btn secondary" type="button" data-cancel-edit="year">取消編輯</button>` : ""}
             </div>
           </form>
@@ -4180,7 +4181,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v46 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v46.1 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4219,7 +4220,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v46 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v46.1 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4969,7 +4970,10 @@ function bindRenderedEvents() {
       return;
     }
 
-    const ok = await confirmAction('確認刪除', `確定要刪除「${tableLabel(table)}」這筆資料？刪除後無法從畫面復原。`);
+    const deleteMessage = table === "years"
+      ? "確定要刪除這個年度？系統會先清理該年度底下的預算項目、預算提撥、預算移轉，以及交易 / 分錄 / 拆帳對這些預算項目的引用。刪除後無法從畫面復原。"
+      : `確定要刪除「${tableLabel(table)}」這筆資料？刪除後無法從畫面復原。`;
+    const ok = await confirmAction('確認刪除', deleteMessage);
     if (!ok) return;
 
     try {
@@ -4977,7 +4981,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v46 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v46.1 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
