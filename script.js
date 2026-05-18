@@ -465,8 +465,29 @@ function getCurrentYearSummary() {
   };
 }
 
+function budgetIsAnnualRolloverMode(item) {
+  return item?.period_type === "annual" && item?.rollover_mode === "carryover";
+}
+
 function budgetIsContributionMode(item) {
   return item?.rollover_mode === "carryover" && ["monthly", "weekly", "custom"].includes(item?.period_type);
+}
+
+function budgetModeKind(item) {
+  if (budgetIsAnnualRolloverMode(item)) return "annual_rollover";
+  if (budgetIsContributionMode(item)) return "contribution";
+  return "fixed";
+}
+
+function budgetModeName(item) {
+  const kind = budgetModeKind(item);
+  if (kind === "annual_rollover") return "年度結轉型";
+  if (kind === "contribution") return "提撥型";
+  return "固定型";
+}
+
+function budgetContributionEligible(item) {
+  return budgetIsContributionMode(item) || budgetIsAnnualRolloverMode(item);
 }
 
 function budgetContributionCount(item) {
@@ -521,8 +542,11 @@ function budgetCurrentAvailableAmount(item) {
 }
 
 function budgetFundingLabel(item) {
+  const itemId = item.id || item.budget_item_id;
+  if (budgetIsAnnualRolloverMode(item)) {
+    return `年度新增 ${fmtMoney(item?.planned_amount || 0)} + 結轉/提撥 ${fmtMoney(budgetContributionTotal(itemId))}`;
+  }
   if (budgetIsContributionMode(item)) {
-    const itemId = item.id || item.budget_item_id;
     return `實際提撥 ${budgetContributionCountActual(itemId)} 筆，累積 ${fmtMoney(budgetContributionTotal(itemId))}`;
   }
   if (item?.period_type && item.period_type !== "annual") {
@@ -532,6 +556,7 @@ function budgetFundingLabel(item) {
 }
 
 function budgetAvailableLabel(item) {
+  if (budgetIsAnnualRolloverMode(item)) return `年度可用 ${fmtMoney(item.current_budget_amount || 0)}`;
   if (budgetIsContributionMode(item)) return `累積提撥 ${fmtMoney(item.current_budget_amount || 0)}`;
   return `預算 ${fmtMoney(item.current_budget_amount || item.planned_amount || 0)}`;
 }
@@ -643,6 +668,12 @@ function budgetAvailableForScope(item, scope = "year") {
   const itemId = item.id || item.budget_item_id;
   const movementNet = budgetMovementNetInScope(itemId, scope);
 
+  if (budgetIsAnnualRolloverMode(item)) {
+    // 年度結轉型：今年新增預算 + 今年收到的前期結轉/加碼提撥 + 預算移轉 - 今年實際。
+    // 實際花費由 selectedBudgetYear 控制，跨年後自然歸 0。
+    return Number(item.planned_amount || 0) + budgetContributionTotalInScope(itemId, scope) + movementNet;
+  }
+
   if (budgetIsContributionMode(item)) {
     return budgetContributionTotalInScope(itemId, scope) + movementNet;
   }
@@ -669,12 +700,14 @@ function budgetItemSummariesForSelectedYear() {
       const category = state.data.categories.find(c => c.id === i.category_id) || {};
       const planned_amount = Number(i.planned_amount || 0);
       const is_contribution_mode = budgetIsContributionMode(i);
+      const is_annual_rollover_mode = budgetIsAnnualRolloverMode(i);
+      const mode_kind = budgetModeKind(i);
       const primary_scope = budgetPrimaryScope(i);
 
-      const year_contribution_count = is_contribution_mode ? budgetContributionCountInScope(i.id, "year") : budgetContributionCount(i);
-      const month_contribution_count = is_contribution_mode ? budgetContributionCountInScope(i.id, "month") : 0;
-      const year_contribution_total = is_contribution_mode ? budgetContributionTotalInScope(i.id, "year") : 0;
-      const month_contribution_total = is_contribution_mode ? budgetContributionTotalInScope(i.id, "month") : 0;
+      const year_contribution_count = budgetContributionEligible(i) ? budgetContributionCountInScope(i.id, "year") : budgetContributionCount(i);
+      const month_contribution_count = budgetContributionEligible(i) ? budgetContributionCountInScope(i.id, "month") : 0;
+      const year_contribution_total = budgetContributionEligible(i) ? budgetContributionTotalInScope(i.id, "year") : 0;
+      const month_contribution_total = budgetContributionEligible(i) ? budgetContributionTotalInScope(i.id, "month") : 0;
 
       const year_movement_in = budgetMovementInTotalInScope(i.id, "year");
       const year_movement_out = budgetMovementOutTotalInScope(i.id, "year");
@@ -723,6 +756,9 @@ function budgetItemSummariesForSelectedYear() {
         month_movement_net,
 
         is_contribution_mode,
+        is_annual_rollover_mode,
+        mode_kind,
+        mode_name: budgetModeName(i),
         current_budget_amount,
         actual_amount,
         remaining_amount,
@@ -1820,6 +1856,154 @@ function renderMonthCloseSweepSuggestions() {
   `;
 }
 
+
+function annualRolloverRows() {
+  return budgetItemSummariesForSelectedYear()
+    .filter(r => r.is_annual_rollover_mode)
+    .filter(r => Number(r.year_remaining_amount ?? r.remaining_amount ?? 0) > 0)
+    .sort((a, b) => Number(b.year_remaining_amount ?? b.remaining_amount ?? 0) - Number(a.year_remaining_amount ?? a.remaining_amount ?? 0));
+}
+
+function budgetAllocationSummary() {
+  const current = getCurrentYearSummary();
+  const items = budgetItemSummariesForSelectedYear();
+  const allocated = items.reduce((sum, i) => sum + Math.max(0, Number(i.current_budget_amount || 0)), 0);
+  const unallocated = Number(current.available_budget || 0) - allocated;
+  return { allocated, unallocated, current };
+}
+
+function renderBudgetAllocationCards() {
+  const s = budgetAllocationSummary();
+  return `
+    <div class="grid cols-3">
+      ${metricCard("預算項目已分配", fmtMoney(s.allocated), "各項目目前可用額度加總")}
+      ${metricCard(s.unallocated >= 0 ? "尚未分配" : "超額分配", fmtMoney(s.unallocated), s.unallocated >= 0 ? "母池尚有空間" : "項目額度超過全局池", s.unallocated >= 0 ? "good" : "bad")}
+      ${metricCard("年度結轉型項目", `${annualRolloverRows().length} 項`, "每年 + 餘額結轉")}
+    </div>
+  `;
+}
+
+async function ensureBudgetYearForNumber(yearNumber) {
+  let row = state.data.years.find(y => Number(y.budget_year) === Number(yearNumber));
+  if (row) return row;
+
+  const currentYear = state.data.years.find(y => y.id === state.selectedYearId) || {};
+  row = await upsert("years", {
+    budget_year: Number(yearNumber),
+    name: `${yearNumber} 年度預算`,
+    budget_mode: currentYear.budget_mode || "annual_total",
+    monthly_budget: Number(currentYear.monthly_budget || 0),
+    budget_start_mode: "record_start",
+    annual_budget: Number(currentYear.annual_budget || 0),
+    carryover_from_previous: 0,
+    note: "由年度結轉型預算項目自動建立"
+  }, { expect: { budget_year: Number(yearNumber) } });
+
+  state.data.years.push(row);
+  return row;
+}
+
+async function getOrCreateNextBudgetItem(currentItem, nextYear) {
+  const existing = (state.data.budgetItems || []).find(i =>
+    i.year_id === nextYear.id
+    && i.name === currentItem.name
+    && i.item_type === currentItem.item_type
+  );
+  if (existing) return existing;
+
+  const payload = {
+    year_id: nextYear.id,
+    category_id: currentItem.category_id || null,
+    name: currentItem.name,
+    item_type: currentItem.item_type || "expense",
+    planned_amount: Number(currentItem.planned_amount || 0),
+    period_type: "annual",
+    rollover_mode: "carryover",
+    sort_order: Number(currentItem.sort_order || 0),
+    is_active: currentItem.is_active !== false,
+    note: currentItem.note || "由年度結轉自動建立"
+  };
+
+  const row = await upsert("budget_items", payload, { expect: { name: payload.name, year_id: payload.year_id } });
+  state.data.budgetItems.push(row);
+  return row;
+}
+
+async function upsertRolloverContribution(nextItem, amount, fromYear) {
+  const contributionDate = `${Number(fromYear) + 1}-01-01`;
+  const marker = `${fromYear} 年度結轉`;
+  const existing = (state.data.budgetContributions || []).find(c =>
+    c.budget_item_id === nextItem.id
+    && c.contribution_date === contributionDate
+    && String(c.note || "").includes(marker)
+  );
+
+  const payload = {
+    id: existing?.id || undefined,
+    budget_item_id: nextItem.id,
+    contribution_date: contributionDate,
+    amount: Math.max(0, Math.round(Number(amount || 0))),
+    note: marker
+  };
+
+  const row = await upsert("budget_contributions", payload, { expect: { budget_item_id: nextItem.id, amount: payload.amount } });
+
+  if (existing) {
+    state.data.budgetContributions = state.data.budgetContributions.map(c => c.id === existing.id ? row : c);
+  } else {
+    state.data.budgetContributions.push(row);
+  }
+
+  return row;
+}
+
+async function rolloverAnnualBudgetItemsToNextYear() {
+  const rows = annualRolloverRows();
+  if (!rows.length) {
+    showAlert("沒有可結轉的年度結轉型預算項目。", "warn");
+    return;
+  }
+
+  const nextYearNumber = Number(state.selectedBudgetYear) + 1;
+  const summary = rows.map(r => `${r.name}：${fmtMoney(r.year_remaining_amount ?? r.remaining_amount)}`).join("\\n");
+  const ok = await confirmAction(
+    "年度結轉型 Envelope",
+    `確定要把以下項目的今年剩餘額度結轉到 ${nextYearNumber} 年？\\n\\n${summary}\\n\\n這會在下一年建立同名預算項目，並新增/更新一筆「${state.selectedBudgetYear} 年度結轉」提撥。下一年的實際花費會自然從 0 開始。`
+  );
+  if (!ok) return;
+
+  const nextYear = await ensureBudgetYearForNumber(nextYearNumber);
+  let count = 0;
+
+  for (const row of rows) {
+    const sourceItem = state.data.budgetItems.find(i => i.id === row.budget_item_id);
+    if (!sourceItem) continue;
+    const nextItem = await getOrCreateNextBudgetItem(sourceItem, nextYear);
+    await upsertRolloverContribution(nextItem, row.year_remaining_amount ?? row.remaining_amount, state.selectedBudgetYear);
+    count += 1;
+  }
+
+  await loadAll();
+  render();
+  showAlert(`已結轉 ${count} 個年度結轉型預算項目到 ${nextYearNumber} 年。`, "good", { timeout: 6000 });
+}
+
+function renderAnnualRolloverCard() {
+  const rows = annualRolloverRows();
+  return `
+    <div class="month-close-box annual-rollover-box">
+      <div>
+        <h4>年度結轉型 Envelope</h4>
+        <p class="metric-sub">適用於「每年 + 餘額結轉」。可用額度跨年承接，但實際花費按年度歸零。例：出國、Live Music、高端餐飲、單口喜劇。</p>
+        ${rows.length ? `<ul class="plain-list">${rows.slice(0, 8).map(r => `<li>${escapeHtml(r.name)}：今年剩餘 ${fmtMoney(r.year_remaining_amount ?? r.remaining_amount)}</li>`).join("")}</ul>` : `<p class="metric-sub">目前沒有可結轉的年度結轉型項目。</p>`}
+      </div>
+      <div class="btn-row">
+        <button class="btn secondary" type="button" id="rolloverAnnualItemsBtn">結轉年度型項目到下一年</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderMonthCloseAdvisor() {
   const rows = budgetItemSummariesForSelectedYear();
   const overspent = rows.filter(r => Number(r.remaining_amount || 0) < 0).sort((a, b) => Number(a.remaining_amount) - Number(b.remaining_amount));
@@ -1885,12 +2069,14 @@ function renderBudget() {
       ${metricCard("剩餘可用預算", fmtMoney(current.remaining_budget), Number(current.remaining_budget || 0) >= 0 ? "預算內" : "超支", Number(current.remaining_budget || 0) >= 0 ? "good" : "bad")}
     </div>
 
+    ${renderBudgetAllocationCards()}
+
     <div class="card budget-focus-card">
       <div class="card-title-row">
         <h3>預算項目</h3>
         <span class="badge">${items.length} 項</span>
       </div>
-      <p class="metric-sub">每月項目主表改看「本月可用 / 本月實際 / 本月剩餘」；年度與自訂項目看年度累積。累積資訊仍保留在右側欄位，避免日常花費數字越滾越大。</p>
+      <p class="metric-sub">每月項目主表看本月；每年 + 餘額結轉 = 年度結轉型，餘額可帶到下一年，但實際花費每年歸零。自訂項目仍看年度累積。</p>
       ${renderBudgetItemTable(items)}
     </div>
 
@@ -1899,6 +2085,8 @@ function renderBudget() {
     ${renderBudgetMovementSection()}
 
     ${renderMonthCloseAdvisor()}
+
+    ${renderAnnualRolloverCard()}
 
     <details class="card budget-editor" ${showEditor ? "open" : ""}>
       <summary>${editYear || editItem ? "正在編輯預算" : "新增 / 編輯年度與預算項目"}</summary>
@@ -1988,7 +2176,7 @@ function renderBudgetItemTable(rows) {
             </div>
             <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
             <div class="mobile-data-meta">
-              <span>${escapeHtml(i.is_contribution_mode ? "提撥型" : "固定型")}</span>
+              <span>${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
               <span>${escapeHtml(isMonth ? `${i.current_month}月視角` : "年度視角")}</span>
               <span>實際 ${fmtMoney(i.actual_amount)}</span>
               <span>${Number(i.remaining_amount || 0) >= 0 ? `剩餘 ${fmtMoney(i.remaining_amount)}` : `超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
@@ -2019,7 +2207,7 @@ function renderBudgetItemTable(rows) {
                 <td><span class="badge">${escapeHtml(labelOf(i.item_type))}</span></td>
                 <td>${escapeHtml(i.category_name || "")}</td>
                 <td>
-                  <span class="badge">${escapeHtml(i.is_contribution_mode ? "提撥型" : "固定型")}</span>
+                  <span class="badge">${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
                   <div class="muted">${escapeHtml(i.funding_label)}${i.movement_net ? `｜本視角移轉淨額 ${fmtMoney(i.movement_net)}` : ""}</div>
                 </td>
                 <td><span class="badge">${escapeHtml(i.scope_label)}</span></td>
@@ -3885,7 +4073,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v44 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v45 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3924,7 +4112,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v44 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v45 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4470,6 +4658,13 @@ function bindRenderedEvents() {
   });
 
   $("#runMonthCloseSweepBtn")?.addEventListener("click", () => runMonthCloseSweepPrompt({ auto: false }));
+  $("#rolloverAnnualItemsBtn")?.addEventListener("click", async () => {
+    try {
+      await rolloverAnnualBudgetItemsToNextYear();
+    } catch (error) {
+      showAlert(`年度結轉型項目結轉失敗：${escapeHtml(error.message)}`, "bad");
+    }
+  });
 
   $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
 
@@ -4592,7 +4787,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v44 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v45 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }

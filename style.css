@@ -1631,3 +1631,10 @@ td.actions { width: 126px; }
     grid-column: 1 / -1;
   }
 }
+
+
+/* v45：年度結轉型 Envelope */
+.annual-rollover-box {
+  border-color: rgba(45, 212, 191, 0.25);
+  background: rgba(20, 184, 166, 0.08);
+}
