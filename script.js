@@ -23,6 +23,8 @@ const state = {
     budgetItems: [],
     budgetContributions: [],
     budgetMovements: [],
+    transactionEntries: [],
+    transactionSplits: [],
     transactions: [],
     transactionView: [],
     accountBalances: [],
@@ -152,6 +154,7 @@ const labelMaps = {
   credit_card: "信用卡",
   loan: "貸款",
   asset: "資產",
+  asset_adjustment: "資產調整",
 
   cashback: "現金回饋",
   points: "點數",
@@ -184,6 +187,8 @@ const tableLabelMap = {
   budget_contributions: "預算提撥",
   budget_movements: "預算移轉",
   transactions: "交易",
+  transaction_entries: "分錄",
+  transaction_splits: "拆帳",
   recurring_transactions: "訂閱",
   quick_templates: "快速模板",
   credit_cards: "信用卡",
@@ -610,6 +615,8 @@ async function loadAll() {
     budgetItems: queryTable("budget_items", { order: { column: "sort_order", ascending: true } }),
     budgetContributions: queryTable("budget_contributions", { order: { column: "contribution_date", ascending: false } }),
     budgetMovements: queryTable("budget_movements", { order: { column: "movement_date", ascending: false } }),
+    transactionEntries: queryTable("transaction_entries", { order: { column: "entry_date", ascending: false } }),
+    transactionSplits: queryTable("transaction_splits", { order: { column: "created_at", ascending: true } }),
     transactions: queryTable("transactions", { order: { column: "transaction_date", ascending: false } }),
     transactionView: queryTable("v_transactions_full", { order: { column: "transaction_date", ascending: false } }),
     accountBalances: queryTable("v_account_balances", { order: { column: "sort_order", ascending: true } }),
@@ -994,7 +1001,8 @@ function txModeButton(type, current) {
     expense: ["支出", "消費 / 預算"],
     income: ["收入", "薪資 / 股息"],
     transfer: ["轉帳", "繳卡 / 投資"],
-    refund: ["退款", "退貨 / 退票"]
+    refund: ["退款", "退貨 / 退票"],
+    asset_adjustment: ["資產調整", "校正 / 盤點"]
   };
   const [title, sub] = labels[type] || [labelOf(type), ""];
   return `
@@ -1008,27 +1016,36 @@ function txModeButton(type, current) {
 function renderTxModePicker(current) {
   return `
     <div class="tx-mode-panel">
-      ${["expense", "income", "transfer", "refund"].map(t => txModeButton(t, current)).join("")}
+      ${["expense", "income", "transfer", "refund", "asset_adjustment"].map(t => txModeButton(t, current)).join("")}
     </div>
   `;
 }
 
 function renderTxPrimaryFields(type, edit = {}) {
-  const accountLabel = type === "income" ? "入帳帳戶" : type === "transfer" ? "轉出帳戶" : type === "refund" ? "退款入帳帳戶" : "付款帳戶";
+  const accountLabel = type === "income" ? "入帳帳戶" : type === "transfer" ? "轉出帳戶" : type === "refund" ? "退款入帳帳戶" : type === "asset_adjustment" ? "調整帳戶" : "付款帳戶";
   const defaultAccount = edit?.account_id || defaultAccountIdFor(type);
-  const merchantLabel = type === "income" ? "收入來源" : type === "transfer" ? "用途" : type === "refund" ? "退款來源" : "商家 / 對象";
-  const merchantPlaceholder = type === "income" ? "例：打工薪資、股息、退稅" : type === "transfer" ? "例：信用卡繳款、投資轉帳" : type === "refund" ? "例：退票退款、退貨退款" : "例：早餐、威秀、Blue Note";
+  const merchantLabel = type === "income" ? "收入來源" : type === "transfer" ? "用途" : type === "refund" ? "退款來源" : type === "asset_adjustment" ? "調整原因" : "商家 / 對象";
+  const merchantPlaceholder = type === "income" ? "例：打工薪資、股息、退稅" : type === "transfer" ? "例：信用卡繳款、投資轉帳" : type === "refund" ? "例：退票退款、退貨退款" : type === "asset_adjustment" ? "例：現金盤點、證券戶市值校正" : "例：早餐、威秀、Blue Note";
   const categoryLabel = type === "income" ? "收入分類" : "分類";
+
+  const amountMin = type === "asset_adjustment" ? "" : 'min="0"';
+  const amountPlaceholder = type === "asset_adjustment" ? "正數=帳戶增加，負數=帳戶減少" : "輸入金額";
 
   const fields = [
     field("日期", `<input class="input" type="date" name="transaction_date" value="${escapeHtml(edit?.transaction_date || today())}" required>`),
-    field("金額", `<input class="input tx-amount-input" type="number" min="0" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="輸入金額">`),
-    field(accountLabel, `<select class="input" name="account_id" required>${accountOptions(edit?.account_id || "")}</select>`)
+    field("金額", `<input class="input tx-amount-input" type="number" ${amountMin} step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="${amountPlaceholder}">`),
+    field(accountLabel, `<select class="input" name="account_id" required>${accountOptions(defaultAccount || "")}</select>`)
   ];
 
   if (type === "transfer") {
     fields.push(field("轉入帳戶", `<select class="input" name="to_account_id" required>${accountOptions(edit?.to_account_id || "")}</select>`));
     fields.push(field("用途", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="${merchantPlaceholder}">`));
+  } else if (type === "asset_adjustment") {
+    fields.push(field("調整方向", `<select class="input" name="adjustment_direction">
+      <option value="increase" ${edit?.adjustment_direction !== "decrease" ? "selected" : ""}>帳戶增加</option>
+      <option value="decrease" ${edit?.adjustment_direction === "decrease" ? "selected" : ""}>帳戶減少</option>
+    </select>`));
+    fields.push(field(merchantLabel, `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="${merchantPlaceholder}">`));
   } else {
     fields.push(field(categoryLabel, `<select class="input" name="category_id">${categoryOptions(type, edit?.category_id || "")}</select>`));
     if (type === "expense" || type === "refund") {
@@ -1043,13 +1060,51 @@ function renderTxPrimaryFields(type, edit = {}) {
   return fields.join("");
 }
 
+
+function splitLinesForTransaction(transactionId) {
+  if (!transactionId) return "";
+  return (state.data.transactionSplits || [])
+    .filter(s => s.transaction_id === transactionId)
+    .map(s => {
+      const cat = state.data.categories.find(c => c.id === s.category_id);
+      const bi = state.data.budgetItems.find(b => b.id === s.budget_item_id);
+      return [cat?.name || "", s.amount || "", bi?.name || ""].filter(Boolean).join(",");
+    })
+    .join("\n");
+}
+
+function parseSplitLines(text, type = "expense") {
+  const lines = String(text || "").split(/\n+/).map(x => x.trim()).filter(Boolean);
+  return lines.map((line, index) => {
+    const parts = line.split(",").map(x => x.trim());
+    if (parts.length < 2) throw new Error(`拆帳第 ${index + 1} 行格式錯誤，請用：分類,金額,預算項目`);
+    const [categoryName, amountText, budgetName] = parts;
+    const category = state.data.categories.find(c => c.type === categoryTypeFor(type) && c.name === categoryName);
+    if (!category) throw new Error(`找不到拆帳分類：${categoryName}`);
+    const budget = budgetName ? state.data.budgetItems.find(b => b.year_id === state.selectedYearId && b.name === budgetName) : null;
+    if (budgetName && !budget) throw new Error(`找不到拆帳預算項目：${budgetName}`);
+    const amount = Number(String(amountText).replaceAll(",", ""));
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error(`拆帳金額錯誤：${amountText}`);
+    return {
+      category_id: category.id,
+      budget_item_id: budget?.id || null,
+      amount,
+      note: null
+    };
+  });
+}
+
 function renderTxAdvancedFields(type, edit = {}) {
   return `
     <details class="advanced-fields wide">
       <summary>進階欄位</summary>
       <div class="form-grid">
-        ${type !== "transfer" ? field("轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`) : ""}
-        ${type !== "refund" ? field("關聯原支出", `<select class="input" name="related_transaction_id">${expenseTransactionOptions(edit?.related_transaction_id || "")}</select>`) : ""}
+        ${type !== "transfer" && type !== "asset_adjustment" ? field("轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`) : ""}
+        ${type !== "refund" && type !== "asset_adjustment" ? field("關聯原支出", `<select class="input" name="related_transaction_id">${expenseTransactionOptions(edit?.related_transaction_id || "")}</select>`) : ""}
+        ${(type === "expense" || type === "refund") ? `<div class="field wide">
+          <label>拆帳</label>
+          <textarea class="input" name="split_lines" placeholder="每行一筆：分類,金額,預算項目（預算項目可省略）">${escapeHtml(splitLinesForTransaction(edit?.id))}</textarea>
+        </div>` : ""}
         ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="現金 / 信用卡 / 轉帳 / Apple Pay">`)}
         ${field("必要程度", `<select class="input" name="necessity_level">
           ${selectOpts(["survival","quality","luxury","investment","other"], edit?.necessity_level || defaultNecessityByType(type))}
@@ -1070,14 +1125,14 @@ function renderTxAdvancedFields(type, edit = {}) {
 }
 
 function defaultNecessityByType(type) {
-  if (type === "income" || type === "transfer") return "other";
+  if (type === "income" || type === "transfer" || type === "asset_adjustment") return "other";
   if (type === "refund") return "other";
   return "quality";
 }
 
 function defaultCashflowByType(type) {
   if (type === "income") return "fixed";
-  if (type === "transfer") return "fixed";
+  if (type === "transfer" || type === "asset_adjustment") return "one_time";
   if (type === "refund") return "one_time";
   return "variable";
 }
@@ -2458,61 +2513,41 @@ function renderAnalyticsSummaryCards() {
 
 function buildTAccountLedgerRows() {
   const ledger = new Map();
+  const txById = new Map((state.data.transactions || []).map(t => [t.id, enrichTransaction(t)]));
 
-  const addEntry = (accountName, side, tx, memo = "") => {
-    if (!accountName) return;
-    if (!ledger.has(accountName)) {
-      ledger.set(accountName, {
-        name: accountName,
-        debit: [],
-        credit: [],
-        debitTotal: 0,
-        creditTotal: 0
-      });
+  const addEntry = (name, side, entry, tx) => {
+    if (!name) return;
+    if (!ledger.has(name)) {
+      ledger.set(name, { name, debit: [], credit: [], debitTotal: 0, creditTotal: 0 });
     }
-
-    const row = ledger.get(accountName);
-    const entry = {
-      date: tx.transaction_date,
-      amount: Number(tx.amount || 0),
-      memo: memo || tx.merchant || tx.note || labelOf(tx.type)
+    const row = ledger.get(name);
+    const amount = Number(entry.amount || 0);
+    const e = {
+      date: entry.entry_date || tx?.transaction_date || "",
+      amount,
+      memo: entry.note || tx?.merchant || tx?.note || labelOf(tx?.type)
     };
-
-    row[side].push(entry);
-    if (side === "debit") row.debitTotal += entry.amount;
-    if (side === "credit") row.creditTotal += entry.amount;
+    row[side].push(e);
+    if (side === "debit") row.debitTotal += amount;
+    if (side === "credit") row.creditTotal += amount;
   };
 
-  transactionsForSelectedYear()
-    .filter(t => t.status !== "cancelled")
-    .forEach(t => {
-      const assetOut = `資產：${t.account_name || "未命名帳戶"}`;
-      const assetIn = `資產：${t.to_account_name || "未命名帳戶"}`;
-      const category = t.category_name || "未分類";
-      const memo = t.merchant || t.note || labelOf(t.type);
-
-      if (t.type === "expense") {
-        addEntry(`費用：${category}`, "debit", t, memo);
-        addEntry(assetOut, "credit", t, memo);
-      } else if (t.type === "refund") {
-        addEntry(assetOut, "debit", t, memo || "退款");
-        addEntry(`費用退款：${category}`, "credit", t, memo || "退款");
-      } else if (t.type === "income") {
-        addEntry(assetOut, "debit", t, memo);
-        addEntry(`收入：${category}`, "credit", t, memo);
-      } else if (t.type === "transfer") {
-        addEntry(assetIn, "debit", t, memo || "轉入");
-        addEntry(assetOut, "credit", t, memo || "轉出");
-      }
-    });
+  (state.data.transactionEntries || [])
+    .filter(e => {
+      const year = e.entry_date ? Number(String(e.entry_date).slice(0, 4)) : null;
+      const tx = txById.get(e.transaction_id);
+      return year === Number(state.selectedBudgetYear) && (!tx || tx.status !== "cancelled");
+    })
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+    .forEach(e => addEntry(e.label || "未命名分錄", e.side, e, txById.get(e.transaction_id)));
 
   return Array.from(ledger.values())
     .sort((a, b) => {
       const order = name => {
-        if (name.startsWith("資產")) return 1;
+        if (name.includes("現金") || name.startsWith("銀行") || name.startsWith("信用卡") || name.startsWith("資產")) return 1;
         if (name.startsWith("費用")) return 2;
-        if (name.startsWith("費用退款")) return 3;
-        if (name.startsWith("收入")) return 4;
+        if (name.startsWith("收入")) return 3;
+        if (name.startsWith("資產調整")) return 4;
         return 9;
       };
       return order(a.name) - order(b.name) || a.name.localeCompare(b.name);
@@ -2568,43 +2603,29 @@ function renderTAccountCards() {
 }
 
 function renderTAccountTable() {
-  const rows = transactionsForSelectedYear().slice(0, 80).map(t => {
-    const account = t.account_name || "";
-    const to = t.to_account_name || "";
-    const category = t.category_name || "未分類";
-    let debit = "";
-    let credit = "";
-    if (t.type === "expense") {
-      debit = `費用：${category}`;
-      credit = `資產：${account}`;
-    } else if (t.type === "refund") {
-      debit = `資產：${account}`;
-      credit = `費用退款：${category}`;
-    } else if (t.type === "income") {
-      debit = `資產：${account}`;
-      credit = `收入：${category}`;
-    } else {
-      debit = `資產：${to}`;
-      credit = `資產：${account}`;
-    }
-    return { ...t, debit, credit };
-  });
-  if (!rows.length) return `<div class="empty">尚無資料</div>`;
+  const txById = new Map((state.data.transactions || []).map(t => [t.id, enrichTransaction(t)]));
+  const rows = (state.data.transactionEntries || [])
+    .filter(e => e.entry_date && Number(String(e.entry_date).slice(0, 4)) === Number(state.selectedBudgetYear))
+    .map(e => ({ ...e, tx: txById.get(e.transaction_id) }))
+    .filter(e => !e.tx || e.tx.status !== "cancelled")
+    .sort((a, b) => String(b.entry_date || "").localeCompare(String(a.entry_date || "")))
+    .slice(0, 160);
+
+  if (!rows.length) return `<div class="empty">尚無分錄資料。請到設定執行「重建分錄」。</div>`;
   return `
     <div class="table-wrap"><table>
-      <thead><tr><th>日期</th><th>借方</th><th>貸方</th><th>金額</th><th>備註</th></tr></thead>
+      <thead><tr><th>日期</th><th>借貸</th><th>科目</th><th>金額</th><th>來源交易</th></tr></thead>
       <tbody>${rows.map(r => `
         <tr>
-          <td>${escapeHtml(r.transaction_date)}</td>
-          <td>${escapeHtml(r.debit)}</td>
-          <td>${escapeHtml(r.credit)}</td>
+          <td>${escapeHtml(r.entry_date)}</td>
+          <td><span class="badge">${r.side === "debit" ? "借方" : "貸方"}</span></td>
+          <td>${escapeHtml(r.label || "")}</td>
           <td class="mono">${fmtMoney(r.amount)}</td>
-          <td>${escapeHtml(r.note || "")}</td>
+          <td>${escapeHtml(r.tx?.merchant || r.tx?.note || labelOf(r.tx?.type))}</td>
         </tr>`).join("")}</tbody>
     </table></div>
   `;
 }
-
 
 
 function renderTemplates() {
@@ -2733,6 +2754,7 @@ function renderSettings() {
           <button class="btn secondary" id="exportCsvBtn">匯出流水帳 CSV</button>
           <button class="btn secondary" id="exportCashflowCsvBtn">匯出現金流量表 CSV</button>
           <button class="btn secondary" id="exportXlsxBtn">匯出 Excel .xlsx</button>
+          <button class="btn secondary" id="rebuildEntriesBtn">重建分錄</button>
           <button class="btn secondary" id="downloadJsonBtn">下載暫存資料</button>
         </div>
       </div>
@@ -3503,7 +3525,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v40 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v41 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3542,7 +3564,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v40 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v41 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -3558,6 +3580,128 @@ function savePreferences(form) {
   return { id: "local" };
 }
 
+
+function accountLabel(accountId) {
+  const acc = state.data.accounts.find(a => a.id === accountId) || {};
+  return `${labelOf(acc.type || "asset")}：${acc.name || "未命名帳戶"}`;
+}
+
+function categoryLabel(categoryId, prefix = "分類") {
+  const cat = state.data.categories.find(c => c.id === categoryId) || {};
+  return `${prefix}：${cat.name || "未分類"}`;
+}
+
+function makeEntry(tx, side, payload = {}) {
+  return {
+    transaction_id: tx.id,
+    entry_date: tx.transaction_date,
+    side,
+    entry_type: payload.entry_type || "account",
+    account_id: payload.account_id || null,
+    category_id: payload.category_id || null,
+    budget_item_id: payload.budget_item_id || null,
+    label: payload.label || "",
+    amount: Math.abs(Number(payload.amount ?? tx.amount ?? 0)),
+    note: payload.note || tx.note || null,
+    sort_order: payload.sort_order || 0
+  };
+}
+
+async function replaceTransactionSplits(transactionId, splitRows) {
+  await state.client.from("transaction_splits").delete().eq("transaction_id", transactionId);
+  if (!splitRows.length) return [];
+  const rows = splitRows.map(s => ({ transaction_id: transactionId, ...s }));
+  const { data, error } = await state.client.from("transaction_splits").insert(rows).select("*");
+  if (error) throw new Error(`拆帳寫入失敗：${formatSupabaseError(error)}`);
+  return data || [];
+}
+
+async function replaceTransactionEntries(transactionId, entries) {
+  await state.client.from("transaction_entries").delete().eq("transaction_id", transactionId);
+  if (!entries.length) return [];
+  const { data, error } = await state.client.from("transaction_entries").insert(entries).select("*");
+  if (error) throw new Error(`分錄寫入失敗：${formatSupabaseError(error)}`);
+  return data || [];
+}
+
+function buildEntriesForTransaction(tx, splitRows = []) {
+  const amount = Math.abs(Number(tx.amount || 0));
+  const memo = tx.merchant || tx.note || labelOf(tx.type);
+  const entries = [];
+  const add = (side, payload) => entries.push(makeEntry(tx, side, { note: memo, ...payload }));
+
+  if (tx.type === "expense") {
+    const splits = splitRows.length ? splitRows : [{ category_id: tx.category_id, budget_item_id: tx.budget_item_id, amount }];
+    splits.forEach((s, idx) => add("debit", {
+      entry_type: "expense",
+      category_id: s.category_id || null,
+      budget_item_id: s.budget_item_id || null,
+      label: categoryLabel(s.category_id, "費用"),
+      amount: s.amount,
+      sort_order: idx + 1
+    }));
+    add("credit", { entry_type: "account", account_id: tx.account_id, label: accountLabel(tx.account_id), amount, sort_order: 99 });
+  } else if (tx.type === "refund") {
+    add("debit", { entry_type: "account", account_id: tx.account_id, label: accountLabel(tx.account_id), amount, sort_order: 1 });
+    const splits = splitRows.length ? splitRows : [{ category_id: tx.category_id, budget_item_id: tx.budget_item_id, amount }];
+    splits.forEach((s, idx) => add("credit", {
+      entry_type: "expense",
+      category_id: s.category_id || null,
+      budget_item_id: s.budget_item_id || null,
+      label: categoryLabel(s.category_id, "費用退款"),
+      amount: s.amount,
+      sort_order: idx + 2
+    }));
+  } else if (tx.type === "income") {
+    add("debit", { entry_type: "account", account_id: tx.account_id, label: accountLabel(tx.account_id), amount, sort_order: 1 });
+    add("credit", { entry_type: "income", category_id: tx.category_id || null, label: categoryLabel(tx.category_id, "收入"), amount, sort_order: 2 });
+  } else if (tx.type === "transfer") {
+    add("debit", { entry_type: "account", account_id: tx.to_account_id, label: accountLabel(tx.to_account_id), amount, sort_order: 1 });
+    add("credit", { entry_type: "account", account_id: tx.account_id, label: accountLabel(tx.account_id), amount, sort_order: 2 });
+  } else if (tx.type === "asset_adjustment") {
+    const direction = tx.adjustment_direction || "increase";
+    if (direction === "decrease") {
+      add("debit", { entry_type: "adjustment", label: "資產調整：減少", amount, sort_order: 1 });
+      add("credit", { entry_type: "account", account_id: tx.account_id, label: accountLabel(tx.account_id), amount, sort_order: 2 });
+    } else {
+      add("debit", { entry_type: "account", account_id: tx.account_id, label: accountLabel(tx.account_id), amount, sort_order: 1 });
+      add("credit", { entry_type: "adjustment", label: "資產調整：增加", amount, sort_order: 2 });
+    }
+  }
+
+  const debit = entries.filter(e => e.side === "debit").reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  const credit = entries.filter(e => e.side === "credit").reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  if (Math.round(debit) !== Math.round(credit)) {
+    throw new Error(`借貸不平衡：借方 ${debit}，貸方 ${credit}`);
+  }
+
+  return entries;
+}
+
+async function rebuildEntriesForTransaction(tx) {
+  const rawSplits = (state.data.transactionSplits || []).filter(s => s.transaction_id === tx.id);
+  const splitRows = rawSplits.map(s => ({
+    category_id: s.category_id,
+    budget_item_id: s.budget_item_id,
+    amount: Number(s.amount || 0),
+    note: s.note || null
+  }));
+  const entries = buildEntriesForTransaction(tx, splitRows);
+  return await replaceTransactionEntries(tx.id, entries);
+}
+
+async function rebuildAllTransactionEntries() {
+  let count = 0;
+  const txRows = state.data.transactions.filter(t => t.status !== "cancelled");
+  for (const tx of txRows) {
+    await rebuildEntriesForTransaction(tx);
+    count += 1;
+  }
+  await loadAll();
+  render();
+  showAlert(`已重建 ${count} 筆交易的分錄。`, "good");
+}
+
 async function saveTransaction(form) {
   const d = readForm(form);
   const type = d.type || state.draftTxType || "expense";
@@ -3565,16 +3709,32 @@ async function saveTransaction(form) {
   if (!Number(d.amount)) throw new Error("請輸入金額");
   if (type === "transfer" && !d.to_account_id) throw new Error("轉帳需要選擇轉入帳戶");
   if (type !== "transfer" && d.to_account_id) d.to_account_id = null;
+
+  const rawAmount = Number(d.amount);
+  const amount = Math.abs(rawAmount);
+  const adjustmentDirection = type === "asset_adjustment"
+    ? (d.adjustment_direction || (rawAmount < 0 ? "decrease" : "increase"))
+    : null;
+
+  const splitRows = (type === "expense" || type === "refund") ? parseSplitLines(d.split_lines || "", type) : [];
+  if (splitRows.length) {
+    const splitTotal = splitRows.reduce((sum, s) => sum + Number(s.amount || 0), 0);
+    if (Math.round(splitTotal) !== Math.round(amount)) {
+      throw new Error(`拆帳合計 ${fmtMoney(splitTotal)} 必須等於交易金額 ${fmtMoney(amount)}`);
+    }
+  }
+
   const payload = {
     id: d.id || undefined,
     transaction_date: d.transaction_date,
     type,
     account_id: d.account_id,
     to_account_id: type === "transfer" ? d.to_account_id : null,
-    category_id: type === "transfer" ? null : d.category_id || null,
+    category_id: ["transfer","asset_adjustment"].includes(type) ? null : d.category_id || null,
     budget_item_id: (type === "expense" || type === "refund") ? d.budget_item_id || null : null,
     related_transaction_id: type === "refund" ? d.related_transaction_id || null : null,
-    amount: numberOrZero(d.amount),
+    amount,
+    adjustment_direction: adjustmentDirection,
     merchant: d.merchant,
     payment_method: d.payment_method,
     note: d.note,
@@ -3583,7 +3743,11 @@ async function saveTransaction(form) {
     cashflow_nature: d.cashflow_nature || defaultCashflowByType(type),
     control_level: d.control_level || "controllable"
   };
-  return await upsert("transactions", payload, { expect: { type: payload.type, amount: payload.amount } });
+
+  const saved = await upsert("transactions", payload, { expect: { type: payload.type, amount: payload.amount } });
+  await replaceTransactionSplits(saved.id, splitRows);
+  await replaceTransactionEntries(saved.id, saved.status === "cancelled" ? [] : buildEntriesForTransaction(saved, splitRows));
+  return saved;
 }
 
 async function saveYear(form) {
@@ -4066,7 +4230,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v40 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v41 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
@@ -4083,6 +4247,13 @@ function bindRenderedEvents() {
   $("#exportCsvBtn")?.addEventListener("click", exportCurrentYearCsv);
   $("#exportCashflowCsvBtn")?.addEventListener("click", exportCashflowStatementCsv);
   $("#exportXlsxBtn")?.addEventListener("click", exportWorkbookXlsx);
+  $("#rebuildEntriesBtn")?.addEventListener("click", async () => {
+    try {
+      await rebuildAllTransactionEntries();
+    } catch (error) {
+      showAlert(`重建分錄失敗：${escapeHtml(error.message)}`, "bad");
+    }
+  });
   $("#downloadJsonBtn")?.addEventListener("click", downloadCacheJson);
 }
 
@@ -4427,6 +4598,9 @@ function exportWorkbookXlsx() {
   const movementRows = enrichedBudgetMovementsForSelectedYear().map(r => [
     r.movement_date, r.from_name, r.to_name, Number(r.amount || 0), r.note || ""
   ]);
+  const entryRows = (state.data.transactionEntries || []).map(e => [
+    e.entry_date, e.side === "debit" ? "借方" : "貸方", e.label || "", Number(e.amount || 0), e.note || ""
+  ]);
   const cashflowRows = cashflowStatementRows().map(r => [r.section, r.item, r.amount, r.ratio, r.note]);
 
   const sheets = [
@@ -4434,7 +4608,8 @@ function exportWorkbookXlsx() {
     { name: "現金流量表", rows: [["區塊","項目","金額","比例","備註"], ...cashflowRows] },
     { name: "預算項目", rows: [["名稱","類型","分類","模式","目前可用","實際","剩餘","使用率","計算方式"], ...budgetRows] },
     { name: "預算提撥", rows: [["日期","預算項目","金額","備註"], ...contributionRows] },
-    { name: "預算移轉", rows: [["日期","從","到","金額","備註"], ...movementRows] }
+    { name: "預算移轉", rows: [["日期","從","到","金額","備註"], ...movementRows] },
+    { name: "分錄", rows: [["日期","借貸","科目","金額","備註"], ...entryRows] }
   ];
 
   const files = [
