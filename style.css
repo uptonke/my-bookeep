@@ -1740,3 +1740,31 @@ td.actions { width: 126px; }
   min-width: 42px;
   text-align: center;
 }
+
+
+/* v48：預算真實性驗算 */
+.budget-reality-card {
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.subtle-details {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.subtle-details summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.badge.good {
+  border-color: rgba(34, 197, 94, 0.38);
+  color: #bbf7d0;
+}
+
+.badge.bad {
+  border-color: rgba(244, 63, 94, 0.38);
+  color: #fecdd3;
+}

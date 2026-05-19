@@ -1964,6 +1964,126 @@ function renderBudgetAllocationCards() {
   `;
 }
 
+
+function accountBalanceRowsMerged() {
+  return (state.data.accountBalances || []).map(row => {
+    const source = state.data.accounts.find(a => a.id === row.id) || {};
+    return {
+      ...source,
+      ...row,
+      current_balance: Number(row.current_balance ?? source.initial_balance ?? 0),
+      note: source.note || row.note || ""
+    };
+  });
+}
+
+function isCashCoverageAccount(account) {
+  const type = account.type || "";
+  const nameNote = `${account.name || ""} ${account.note || ""}`.toLowerCase();
+
+  if (["cash", "bank", "e_wallet"].includes(type)) return true;
+
+  // 證券戶「現金」可列入；股票 / ETF / 基金市值不列入。
+  if (type === "asset") {
+    const hasBroker = /(證券|券商|broker|brokerage|schwab|ibkr|firstrade)/i.test(nameNote);
+    const hasCash = /(現金|cash|money market|settlement|交割)/i.test(nameNote);
+    return hasBroker && hasCash;
+  }
+
+  return false;
+}
+
+function isBudgetLiabilityAccount(account) {
+  return ["credit_card", "loan"].includes(account.type || "");
+}
+
+function budgetRealityCheckSummary() {
+  const accounts = accountBalanceRowsMerged().filter(a => a.is_active !== false);
+  const cashAccounts = accounts
+    .filter(isCashCoverageAccount)
+    .map(a => ({ ...a, coverage_amount: Math.max(0, Number(a.current_balance || 0)) }));
+
+  const liabilityAccounts = accounts
+    .filter(isBudgetLiabilityAccount)
+    .map(a => ({ ...a, liability_amount: Math.max(0, -Number(a.current_balance || 0)) }));
+
+  const excludedAccounts = accounts.filter(a => !isCashCoverageAccount(a) && !isBudgetLiabilityAccount(a));
+
+  const cashCoverage = cashAccounts.reduce((sum, a) => sum + Number(a.coverage_amount || 0), 0);
+  const liabilities = liabilityAccounts.reduce((sum, a) => sum + Number(a.liability_amount || 0), 0);
+  const availableCashNet = cashCoverage - liabilities;
+
+  const budgetRows = budgetItemSummariesForSelectedYear();
+  const budgetRemaining = budgetRows.reduce((sum, r) => sum + Math.max(0, Number(r.remaining_amount || 0)), 0);
+  const overspent = budgetRows.reduce((sum, r) => sum + Math.max(0, -Number(r.remaining_amount || 0)), 0);
+  const safetyBuffer = availableCashNet - budgetRemaining;
+
+  return {
+    cashAccounts,
+    liabilityAccounts,
+    excludedAccounts,
+    cashCoverage,
+    liabilities,
+    availableCashNet,
+    budgetRemaining,
+    overspent,
+    safetyBuffer
+  };
+}
+
+function renderBudgetRealityCheck() {
+  const s = budgetRealityCheckSummary();
+  const status = s.safetyBuffer >= 0 ? "good" : "bad";
+  const statusText = s.safetyBuffer >= 0 ? "現金覆蓋足夠" : "現金覆蓋不足";
+  const cashList = s.cashAccounts.length
+    ? `<ul class="plain-list">${s.cashAccounts.map(a => `<li>${escapeHtml(a.name)}（${escapeHtml(labelOf(a.type))}）：${fmtMoney(a.coverage_amount)}</li>`).join("")}</ul>`
+    : `<p class="metric-sub">尚無列入覆蓋的現金類帳戶。現金 / 銀行 / 電子支付會自動列入；證券戶現金請命名含「證券」與「現金」。</p>`;
+
+  const liabilityList = s.liabilityAccounts.length
+    ? `<ul class="plain-list">${s.liabilityAccounts.map(a => `<li>${escapeHtml(a.name)}（${escapeHtml(labelOf(a.type))}）：${fmtMoney(a.liability_amount)}</li>`).join("")}</ul>`
+    : `<p class="metric-sub">尚無信用卡 / 貸款扣項，或目前餘額不是負債。</p>`;
+
+  const excludedList = s.excludedAccounts.length
+    ? `<ul class="plain-list">${s.excludedAccounts.slice(0, 8).map(a => `<li>${escapeHtml(a.name)}（${escapeHtml(labelOf(a.type))}）：未列入</li>`).join("")}${s.excludedAccounts.length > 8 ? `<li>其餘 ${s.excludedAccounts.length - 8} 個帳戶未列入</li>` : ""}</ul>`
+    : `<p class="metric-sub">沒有被排除的帳戶。</p>`;
+
+  return `
+    <div class="card budget-reality-card">
+      <div class="card-title-row">
+        <h3>預算真實性驗算</h3>
+        <span class="badge ${status}">${escapeHtml(statusText)}</span>
+      </div>
+      <p class="metric-sub">公式：現金 + 活存 / 銀行 + 電子支付 + 證券戶現金 − 信用卡 / 貸款扣項 − 預算項目剩餘總額 = 預算安全墊。不納入股票、ETF、基金與長期投資市值。</p>
+
+      <div class="grid cols-4">
+        ${metricCard("現金類資金", fmtMoney(s.cashCoverage), "現金 / 銀行 / 電支 / 證券戶現金", "good")}
+        ${metricCard("信用卡 / 貸款扣項", fmtMoney(s.liabilities), "負債扣除", s.liabilities > 0 ? "bad" : "")}
+        ${metricCard("預算剩餘銀彈", fmtMoney(s.budgetRemaining), "各預算項目剩餘加總")}
+        ${metricCard("預算安全墊", fmtMoney(s.safetyBuffer), s.safetyBuffer >= 0 ? "現金足以覆蓋預算" : "預算超過現金支撐", status)}
+      </div>
+
+      <details class="subtle-details">
+        <summary>查看驗算明細</summary>
+        <div class="grid cols-3" style="margin-top:12px">
+          <div>
+            <h4>列入覆蓋</h4>
+            ${cashList}
+          </div>
+          <div>
+            <h4>扣項</h4>
+            ${liabilityList}
+          </div>
+          <div>
+            <h4>未列入</h4>
+            ${excludedList}
+          </div>
+        </div>
+        ${s.overspent > 0 ? `<p class="metric-sub">另有預算項目超支合計 ${fmtMoney(s.overspent)}；此數字不會拿來抵減剩餘銀彈，請另外補洞。</p>` : ""}
+      </details>
+    </div>
+  `;
+}
+
 async function ensureBudgetYearForNumber(yearNumber) {
   let row = state.data.years.find(y => Number(y.budget_year) === Number(yearNumber));
   if (row) return row;
@@ -2179,6 +2299,8 @@ function renderBudget() {
     </div>
 
     ${renderBudgetAllocationCards()}
+
+    ${renderBudgetRealityCheck()}
 
     <div class="card budget-focus-card">
       <div class="card-title-row">
@@ -4187,7 +4309,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v47.1 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v48 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4226,7 +4348,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v47.1 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v48 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4987,7 +5109,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v47.1 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v48 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
