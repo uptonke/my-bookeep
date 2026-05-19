@@ -1774,3 +1774,9 @@ td.actions { width: 126px; }
 #accountForm [name="coverage_mode"] {
   font-weight: 700;
 }
+
+
+/* v50：全局預算提撥紀錄 */
+#globalBudgetContributionForm {
+  margin-top: 10px;
+}

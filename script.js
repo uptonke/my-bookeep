@@ -451,31 +451,109 @@ function yearBudgetContributionCount(year = {}) {
 }
 
 function yearBudgetModeLabel(summary) {
-  if ((summary?.budget_mode || "annual_total") === "monthly_contribution") {
-    return `每次提撥 ${fmtMoney(summary.monthly_budget)} × 已提撥 ${summary.contribution_count} 次｜起點：記帳開始月`;
+  return `全局提撥 ${summary.contribution_count || 0} 筆｜提撥累積 ${fmtMoney(summary.current_period_budget || 0)}`;
+}
+
+
+function selectedYearRecord() {
+  return state.data.years.find(y => y.id === state.selectedYearId)
+    || state.data.years.find(y => Number(y.budget_year) === Number(state.selectedBudgetYear))
+    || {};
+}
+
+function globalBudgetContributionRowsFromNote(note = "") {
+  const match = String(note || "").match(/\[global_budget_contributions:([^\]]*)\]/);
+  if (!match) return [];
+  try {
+    const rows = JSON.parse(decodeURIComponent(match[1]));
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map(r => ({
+        id: String(r.id || ""),
+        contribution_date: String(r.contribution_date || ""),
+        amount: Number(r.amount || 0),
+        note: String(r.note || "")
+      }))
+      .filter(r => r.id && r.contribution_date && Number.isFinite(r.amount));
+  } catch (error) {
+    console.warn("global budget contributions parse failed", error);
+    return [];
   }
-  return "年度總額一次配置";
+}
+
+function stripGlobalBudgetContributionsMarker(note = "") {
+  return String(note || "").replace(/\s*\[global_budget_contributions:[^\]]*\]\s*/g, "").trim();
+}
+
+function applyGlobalBudgetContributionsMarker(note = "", rows = []) {
+  const cleaned = stripGlobalBudgetContributionsMarker(note);
+  const normalized = (rows || [])
+    .map(r => ({
+      id: String(r.id || ""),
+      contribution_date: String(r.contribution_date || ""),
+      amount: Number(r.amount || 0),
+      note: String(r.note || "")
+    }))
+    .filter(r => r.id && r.contribution_date && Number.isFinite(r.amount));
+  if (!normalized.length) return cleaned;
+  const marker = `[global_budget_contributions:${encodeURIComponent(JSON.stringify(normalized))}]`;
+  return `${cleaned}${cleaned ? "\n" : ""}${marker}`;
+}
+
+function globalBudgetContributionRowsForYear(year = selectedYearRecord()) {
+  return globalBudgetContributionRowsFromNote(year?.note || "")
+    .filter(r => contributionYear(r.contribution_date) === Number(year?.budget_year || state.selectedBudgetYear))
+    .sort((a, b) => String(b.contribution_date || "").localeCompare(String(a.contribution_date || "")));
+}
+
+function globalBudgetContributionRowsForSelectedYear() {
+  return globalBudgetContributionRowsForYear(selectedYearRecord());
+}
+
+function globalBudgetContributionTotalForYear(year = selectedYearRecord()) {
+  return globalBudgetContributionRowsForYear(year).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+}
+
+function globalBudgetContributionCountForYear(year = selectedYearRecord()) {
+  return globalBudgetContributionRowsForYear(year).length;
+}
+
+function makeClientId(prefix = "gcontrib") {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+async function updateSelectedYearGlobalContributions(rows, userNote = null) {
+  const year = selectedYearRecord();
+  if (!year?.id) throw new Error("找不到目前年度，請先儲存年度設定。");
+  const baseNote = userNote === null ? stripGlobalBudgetContributionsMarker(year.note || "") : userNote;
+  const cleanRows = (rows || []).sort((a, b) => String(a.contribution_date || "").localeCompare(String(b.contribution_date || "")));
+  const note = applyGlobalBudgetContributionsMarker(baseNote, cleanRows);
+  const total = cleanRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  const saved = await upsert("years", {
+    ...year,
+    budget_mode: "monthly_contribution",
+    monthly_budget: 0,
+    annual_budget: total,
+    note
+  }, { expect: { budget_year: Number(year.budget_year || state.selectedBudgetYear) } });
+  return saved;
 }
 
 function getCurrentYearSummary() {
-  const year = state.data.years.find(y => y.id === state.selectedYearId)
-    || state.data.years.find(y => Number(y.budget_year) === Number(state.selectedBudgetYear))
-    || {};
+  const year = selectedYearRecord();
   const txRows = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
   const actual_income = txRows.reduce((sum, t) => sum + (t.type === "income" ? Number(t.amount || 0) : 0), 0);
   const gross_expense = txRows.reduce((sum, t) => sum + (t.type === "expense" ? Number(t.amount || 0) : 0), 0);
   const refund = txRows.reduce((sum, t) => sum + (t.type === "refund" ? Number(t.amount || 0) : 0), 0);
   const actual_expense = gross_expense - refund;
 
-  const budget_mode = year.budget_mode || "annual_total";
-  const monthly_budget = Number(year.monthly_budget || 0);
-  const contribution_count = yearBudgetContributionCount(year);
-  const annual_budget = budget_mode === "monthly_contribution"
-    ? monthly_budget * 12
-    : Number(year.annual_budget || 0);
-  const current_period_budget = budget_mode === "monthly_contribution"
-    ? monthly_budget * contribution_count
-    : annual_budget;
+  // v50：全局年度預算改用實際提撥紀錄制，不再使用「每次提撥金額 × 次數」。
+  const budget_mode = "monthly_contribution";
+  const monthly_budget = 0;
+  const contribution_count = globalBudgetContributionCountForYear(year);
+  const annual_budget = globalBudgetContributionTotalForYear(year);
+  const current_period_budget = annual_budget;
 
   const carryover_from_previous = Number(year.carryover_from_previous || 0);
   const available_budget = current_period_budget + carryover_from_previous;
@@ -498,7 +576,7 @@ function getCurrentYearSummary() {
     remaining_budget,
     budget_used_pct: available_budget ? Math.round(actual_expense / available_budget * 10000) / 100 : 0,
     is_closed: year.is_closed,
-    note: year.note
+    note: stripGlobalBudgetContributionsMarker(year.note || "")
   };
 }
 
@@ -2131,6 +2209,103 @@ function renderBudgetRealityCheck() {
   `;
 }
 
+
+function renderGlobalBudgetContributionSection() {
+  const rows = globalBudgetContributionRowsForSelectedYear();
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>新增全局預算提撥</h3>
+        <span class="badge">年度母池</span>
+      </div>
+      <p class="metric-sub">全局年度預算現在以實際提撥紀錄為準。公式：目前可用預算 = 前期結轉 + 全局提撥紀錄合計。</p>
+      <form id="globalBudgetContributionForm" class="form-grid">
+        ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(today())}" required>`)}
+        ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" required placeholder="例：25000">`)}
+        <div class="field wide">
+          <label>備註</label>
+          <textarea class="input" name="note" placeholder="例：5 月稅後收入扣掉儲蓄後可支配預算"></textarea>
+        </div>
+        <div class="wide btn-row">
+          <button class="btn" type="submit">新增全局提撥</button>
+        </div>
+      </form>
+    </div>
+
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>全局提撥紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderGlobalBudgetContributionTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderGlobalBudgetContributionTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無全局提撥紀錄。</div>`;
+  const mobileCards = `
+    <div class="mobile-card-list">
+      ${rows.slice(0, 80).map(r => `
+        <div class="mobile-data-card">
+          <div class="mobile-data-head">
+            <div>
+              <strong>全局預算提撥</strong>
+              <span>${escapeHtml(r.contribution_date || "")}</span>
+            </div>
+            <div class="mobile-amount">${fmtMoney(r.amount)}</div>
+          </div>
+          <div class="mobile-data-meta">${r.note ? `<span>${escapeHtml(r.note)}</span>` : ""}</div>
+          <div class="mobile-card-actions">
+            <button type="button" class="btn small danger" data-delete-global-contribution="${escapeHtml(r.id)}">刪除</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
+
+  const tableView = `
+    <div class="table-wrap desktop-table">
+      <table>
+        <thead><tr><th>日期</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
+        <tbody>${rows.slice(0, 120).map(r => `
+          <tr>
+            <td>${escapeHtml(r.contribution_date || "")}</td>
+            <td class="mono good">${fmtMoney(r.amount)}</td>
+            <td>${escapeHtml(r.note || "")}</td>
+            <td class="actions">
+              <button type="button" class="btn small danger" data-delete-global-contribution="${escapeHtml(r.id)}">刪除</button>
+            </td>
+          </tr>`).join("")}</tbody>
+      </table>
+    </div>`;
+  return `${mobileCards}${tableView}`;
+}
+
+async function saveGlobalBudgetContribution(form) {
+  const d = readForm(form);
+  if (!d.contribution_date) throw new Error("請選擇提撥日期");
+  if (!Number(d.amount)) throw new Error("請輸入提撥金額");
+
+  const rows = globalBudgetContributionRowsForSelectedYear();
+  rows.push({
+    id: makeClientId("global_budget_contribution"),
+    contribution_date: d.contribution_date,
+    amount: numberOrZero(d.amount),
+    note: d.note || ""
+  });
+
+  return await updateSelectedYearGlobalContributions(rows);
+}
+
+async function deleteGlobalBudgetContribution(id) {
+  const rows = globalBudgetContributionRowsForSelectedYear();
+  const nextRows = rows.filter(r => r.id !== id);
+  if (nextRows.length === rows.length) throw new Error("找不到這筆全局提撥紀錄。");
+  return await updateSelectedYearGlobalContributions(nextRows);
+}
+
 async function ensureBudgetYearForNumber(yearNumber) {
   let row = state.data.years.find(y => Number(y.budget_year) === Number(yearNumber));
   if (row) return row;
@@ -2340,7 +2515,7 @@ function renderBudget() {
   return `
     <div class="grid cols-4">
       ${metricCard("目前可用預算", fmtMoney(current.available_budget), yearBudgetModeLabel(current))}
-      ${metricCard("年度總預算", fmtMoney(current.annual_budget), current.budget_mode === "monthly_contribution" ? "每次提撥 × 12" : "年度總額")}
+      ${metricCard("年度總預算", fmtMoney(current.annual_budget), "全局提撥紀錄合計")}
       ${metricCard("已用預算", fmtMoney(current.actual_expense), `${fmtNumber(current.budget_used_pct, 1)}%`, "bad")}
       ${metricCard("剩餘可用預算", fmtMoney(current.remaining_budget), Number(current.remaining_budget || 0) >= 0 ? "預算內" : "超支", Number(current.remaining_budget || 0) >= 0 ? "good" : "bad")}
     </div>
@@ -2348,6 +2523,8 @@ function renderBudget() {
     ${renderBudgetAllocationCards()}
 
     ${renderBudgetRealityCheck()}
+
+    ${renderGlobalBudgetContributionSection()}
 
     <div class="card budget-focus-card">
       <div class="card-title-row">
@@ -2376,18 +2553,13 @@ function renderBudget() {
             <input type="hidden" name="id" value="${escapeHtml(editYear?.id || "")}">
             ${field("年度", `<input class="input" type="number" name="budget_year" min="2000" max="2100" value="${escapeHtml(editYear?.budget_year || state.selectedBudgetYear)}" required>`)}
             ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editYear?.name || "")}" placeholder="例：2026 年度預算">`)}
-            ${field("預算模式", `<select class="input" name="budget_mode">
-              ${selectOpts(["annual_total","monthly_contribution"], editYear?.budget_mode || current.budget_mode || "annual_total")}
-            </select>`)}
-            ${field("年度總預算", `<input class="input" type="number" step="1" name="annual_budget" value="${escapeHtml(editYear?.annual_budget ?? current.annual_budget ?? 0)}" placeholder="年度總額模式使用">`)}
-            ${field("每次提撥金額", `<input class="input" type="number" step="1" name="monthly_budget" value="${escapeHtml(editYear?.monthly_budget ?? current.monthly_budget ?? 0)}" placeholder="月提撥模式使用">`)}
-            ${field("計算起點", `<select class="input" name="budget_start_mode">
-              <option value="record_start" selected>記帳開始月（模式 B）</option>
-            </select>`)}
+            ${field("預算模式", `<input class="input" value="提撥紀錄制" disabled><input type="hidden" name="budget_mode" value="monthly_contribution">`)}
+            ${field("年度總預算", `<input class="input" value="${escapeHtml(fmtMoney(current.annual_budget || 0))}" disabled><input type="hidden" name="annual_budget" value="${escapeHtml(current.annual_budget || 0)}">`)}
+            ${field("計算起點", `<input class="input" value="依全局提撥紀錄" disabled><input type="hidden" name="budget_start_mode" value="record_start">`)}
             ${field("前期結轉", `<input class="input" type="number" step="1" name="carryover_from_previous" value="${escapeHtml(editYear?.carryover_from_previous ?? current.carryover_from_previous ?? 0)}">`)}
             <div class="field wide">
               <label>備註</label>
-              <textarea class="input" name="note">${escapeHtml(editYear?.note || "")}</textarea>
+              <textarea class="input" name="note">${escapeHtml(stripGlobalBudgetContributionsMarker(editYear?.note || ""))}</textarea>
             </div>
             <div class="wide btn-row">
               <button class="btn" type="submit">儲存年度</button>
@@ -4321,6 +4493,9 @@ async function handleSubmit(event) {
       case "budgetContributionForm":
         saved = await saveBudgetContribution(form);
         break;
+      case "globalBudgetContributionForm":
+        saved = await saveGlobalBudgetContribution(form);
+        break;
       case "budgetMovementForm":
         saved = await saveBudgetMovement(form);
         break;
@@ -4358,7 +4533,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v49 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v50 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4397,7 +4572,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v49 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v50 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4585,22 +4760,22 @@ async function saveTransaction(form) {
 
 async function saveYear(form) {
   const d = readForm(form);
-  const budgetMode = d.budget_mode || "annual_total";
-  const monthlyBudget = numberOrZero(d.monthly_budget);
-  const annualBudget = budgetMode === "monthly_contribution"
-    ? monthlyBudget * 12
-    : numberOrZero(d.annual_budget);
+  const yearBefore = d.id
+    ? state.data.years.find(y => y.id === d.id)
+    : state.data.years.find(y => Number(y.budget_year) === Number(d.budget_year)) || selectedYearRecord();
+  const existingGlobalRows = globalBudgetContributionRowsFromNote(yearBefore?.note || "");
+  const annualBudget = existingGlobalRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
 
   const payload = {
     id: d.id || undefined,
     budget_year: Number(d.budget_year),
     name: d.name || `${d.budget_year} 年度預算`,
-    budget_mode: budgetMode,
-    monthly_budget: monthlyBudget,
+    budget_mode: "monthly_contribution",
+    monthly_budget: 0,
     budget_start_mode: "record_start",
     annual_budget: annualBudget,
     carryover_from_previous: numberOrZero(d.carryover_from_previous),
-    note: d.note
+    note: applyGlobalBudgetContributionsMarker(d.note || "", existingGlobalRows)
   };
   const row = await upsert("years", payload, { expect: { budget_year: Number(d.budget_year) } });
   state.selectedYearId = row.id;
@@ -4932,60 +5107,40 @@ async function removeEntity(table, id) {
 
 async function closeYearToNextYear() {
   const current = getCurrentYearSummary();
-  const currentYear = state.data.years.find(y => y.id === state.selectedYearId) || {};
+  const currentYear = selectedYearRecord();
   const nextYearNumber = Number(state.selectedBudgetYear) + 1;
   const existingNext = state.data.years.find(y => Number(y.budget_year) === nextYearNumber);
-
   const carryover = Math.round(Number(current.remaining_budget || 0));
-  const mode = current.budget_mode || currentYear.budget_mode || "annual_total";
-  const defaultNextAmount = mode === "monthly_contribution"
-    ? Number(current.monthly_budget || currentYear.monthly_budget || 0)
-    : Number(current.annual_budget || currentYear.annual_budget || 0);
-
-  const label = mode === "monthly_contribution" ? "下一年的每次提撥金額" : "下一年的年度預算";
-  const input = window.prompt(
-    `${label}？\n\n結轉金額會固定使用今年剩餘額度：${fmtMoney(carryover)}\n你現在輸入的是「下一年新增預算」，不是結轉金額。`,
-    String(Math.round(defaultNextAmount))
-  );
-
-  if (input === null) return;
-
-  const nextBudgetAmount = Number(String(input).replaceAll(",", "").trim());
-  if (!Number.isFinite(nextBudgetAmount)) {
-    showAlert("結轉失敗：請輸入有效數字。", "bad");
-    return;
-  }
-
-  const nextPayload = {
-    id: existingNext?.id || undefined,
-    budget_year: nextYearNumber,
-    name: existingNext?.name || `${nextYearNumber} 年度預算`,
-    budget_mode: existingNext?.budget_mode || mode,
-    monthly_budget: mode === "monthly_contribution" ? nextBudgetAmount : Number(existingNext?.monthly_budget || 0),
-    budget_start_mode: "record_start",
-    annual_budget: mode === "monthly_contribution" ? nextBudgetAmount * 12 : nextBudgetAmount,
-    carryover_from_previous: carryover,
-    note: existingNext?.note || ""
-  };
 
   const ok = await confirmAction(
     "年度結轉",
-    `確定要關閉 ${state.selectedBudgetYear} 年？\n\n${nextYearNumber} 年將使用：\n前期結轉：${fmtMoney(carryover)}\n${label}：${fmtMoney(nextBudgetAmount)}`
+    `確定要關閉 ${state.selectedBudgetYear} 年？\n\n${nextYearNumber} 年將使用：\n前期結轉：${fmtMoney(carryover)}\n年度總預算：先由下一年的全局提撥紀錄累積，不再填每次提撥金額。`
   );
   if (!ok) return;
 
   await upsert("years", {
     ...currentYear,
-    is_closed: true
+    is_closed: true,
+    note: applyGlobalBudgetContributionsMarker(stripGlobalBudgetContributionsMarker(currentYear.note || ""), globalBudgetContributionRowsFromNote(currentYear.note || ""))
   }, { expect: { budget_year: Number(state.selectedBudgetYear) } });
 
-  const next = await upsert("years", nextPayload, { expect: { budget_year: nextYearNumber } });
+  const next = await upsert("years", {
+    id: existingNext?.id || undefined,
+    budget_year: nextYearNumber,
+    name: existingNext?.name || `${nextYearNumber} 年度預算`,
+    budget_mode: "monthly_contribution",
+    monthly_budget: 0,
+    budget_start_mode: "record_start",
+    annual_budget: globalBudgetContributionTotalForYear(existingNext || { budget_year: nextYearNumber, note: "" }),
+    carryover_from_previous: carryover,
+    note: existingNext?.note || ""
+  }, { expect: { budget_year: nextYearNumber } });
 
   state.selectedYearId = next.id;
   state.selectedBudgetYear = next.budget_year;
   await loadAll();
   render();
-  showAlert(`已結轉到 ${nextYearNumber} 年：前期結轉 ${fmtMoney(carryover)}，新增預算 ${fmtMoney(nextBudgetAmount)}。`, "good");
+  showAlert(`已結轉到 ${nextYearNumber} 年：前期結轉 ${fmtMoney(carryover)}。`, "good");
 }
 
 function bindRenderedEvents() {
@@ -5158,9 +5313,23 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v49 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v50 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
+    }
+  }));
+
+  $$("[data-delete-global-contribution]").forEach(btn => btn.addEventListener("click", async () => {
+    const id = btn.dataset.deleteGlobalContribution;
+    const ok = await confirmAction("刪除全局提撥", "確定要刪除這筆全局預算提撥？");
+    if (!ok) return;
+    try {
+      await deleteGlobalBudgetContribution(id);
+      await loadAll();
+      render();
+      showAlert("全局預算提撥已刪除。", "good");
+    } catch (error) {
+      showAlert(`刪除全局提撥失敗：${escapeHtml(error.message)}`, "bad");
     }
   }));
 
