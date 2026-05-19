@@ -15,6 +15,7 @@ const state = {
   selectedBudgetYear: new Date().getFullYear(),
   draftTxType: "expense",
   draftRecurringType: "expense",
+  budgetOperationMode: "globalContribution",
   data: {
     years: [],
     accounts: [],
@@ -1109,7 +1110,13 @@ function render() {
       await loadAll();
       render();
     });
-    $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
+    $$("[data-budget-operation]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
+    state.budgetOperationMode = btn.dataset.budgetOperation || "globalContribution";
+    render();
+  }));
+
+  $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
     showAlert(`頁面載入失敗：${escapeHtml(error.message || String(error))}`, "bad");
   }
 }
@@ -2505,12 +2512,236 @@ function renderMonthCloseAdvisor() {
   `;
 }
 
+
+function activeBudgetOperationMode() {
+  if (state.editing.budgetContribution) return "itemContribution";
+  if (state.editing.budgetMovement) return "movement";
+  if (state.editing.budgetItem) return "item";
+  if (state.editing.year) return "year";
+  return state.budgetOperationMode || "globalContribution";
+}
+
+function budgetOperationTab(mode, label) {
+  const active = activeBudgetOperationMode() === mode ? "active" : "";
+  return `<button class="seg-btn ${active}" type="button" data-budget-operation="${mode}">${escapeHtml(label)}</button>`;
+}
+
+function clearBudgetOperationEditing() {
+  state.editing.year = null;
+  state.editing.budgetItem = null;
+  state.editing.budgetContribution = null;
+  state.editing.budgetMovement = null;
+}
+
+function renderYearSettingsForm(editYear, current) {
+  return `
+    <form id="yearForm" class="form-grid two">
+      <input type="hidden" name="id" value="${escapeHtml(editYear?.id || "")}">
+      ${field("年度", `<input class="input" type="number" name="budget_year" min="2000" max="2100" value="${escapeHtml(editYear?.budget_year || state.selectedBudgetYear)}" required>`)}
+      ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editYear?.name || "")}" placeholder="例：2026 年度預算">`)}
+      ${field("預算模式", `<input class="input" value="提撥紀錄制" disabled><input type="hidden" name="budget_mode" value="monthly_contribution">`)}
+      ${field("年度總預算", `<input class="input" value="${escapeHtml(fmtMoney(current.annual_budget || 0))}" disabled><input type="hidden" name="annual_budget" value="${escapeHtml(current.annual_budget || 0)}">`)}
+      ${field("計算起點", `<input class="input" value="依全局提撥紀錄" disabled><input type="hidden" name="budget_start_mode" value="record_start">`)}
+      ${field("前期結轉", `<input class="input" type="number" step="1" name="carryover_from_previous" value="${escapeHtml(editYear?.carryover_from_previous ?? current.carryover_from_previous ?? 0)}">`)}
+      <div class="field wide">
+        <label>備註</label>
+        <textarea class="input" name="note">${escapeHtml(stripGlobalBudgetContributionsMarker(editYear?.note || ""))}</textarea>
+      </div>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">儲存年度</button>
+        <button class="btn secondary" type="button" data-edit-year="${state.selectedYearId}">載入目前年度編輯</button>
+        <button class="btn secondary" type="button" id="closeYearBtn">結轉到下一年</button>
+        ${editYear ? `<button class="btn danger" type="button" data-delete="years:${editYear.id}">刪除年度</button>` : ""}
+        ${editYear ? `<button class="btn secondary" type="button" data-cancel-edit="year">取消編輯</button>` : ""}
+      </div>
+    </form>
+  `;
+}
+
+function renderBudgetItemForm(editItem) {
+  return `
+    <form id="budgetItemForm" class="form-grid two">
+      <input type="hidden" name="id" value="${escapeHtml(editItem?.id || "")}">
+      ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editItem?.name || "")}" required placeholder="例：日常餐飲">`)}
+      ${field("類型", `<select class="input" name="item_type">${selectOpts(["expense","income","saving","other"], editItem?.item_type || "expense")}</select>`)}
+      ${field("金額", `<input class="input" type="number" step="1" name="planned_amount" value="${escapeHtml(editItem?.planned_amount || "")}" required placeholder="固定預算，或參考額度">`)}
+      ${field("分類", `<select class="input" name="category_id">${categoryOptions(editItem?.item_type || "expense", editItem?.category_id || "")}</select>`)}
+      <details class="advanced-fields wide">
+        <summary>進階欄位</summary>
+        <div class="form-grid two">
+          ${field("期間", `<select class="input" name="period_type">${selectOpts(["annual","monthly","weekly","custom"], editItem?.period_type || "annual")}</select>`)}
+          ${field("結轉模式", `<select class="input" name="rollover_mode">${selectOpts(["none","carryover","overspend_to_next"], editItem?.rollover_mode || "none")}</select>`)}
+          ${field("提撥起始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(editItem?.start_date || "")}">`)}
+          ${field("提撥結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(editItem?.end_date || "")}">`)}
+          ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(editItem?.sort_order || 0)}">`)}
+          ${field("啟用", `<select class="input" name="is_active">
+            <option value="true" ${editItem?.is_active !== false ? "selected" : ""}>啟用</option>
+            <option value="false" ${editItem?.is_active === false ? "selected" : ""}>停用</option>
+          </select>`)}
+          <div class="field wide">
+            <label>備註</label>
+            <textarea class="input" name="note">${escapeHtml(editItem?.note || "")}</textarea>
+          </div>
+        </div>
+      </details>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">${editItem ? "儲存修改" : "新增項目"}</button>
+        ${editItem ? `<button class="btn secondary" type="button" data-cancel-edit="budgetItem">取消編輯</button>` : ""}
+      </div>
+    </form>
+  `;
+}
+
+function renderGlobalBudgetContributionForm() {
+  return `
+    <form id="globalBudgetContributionForm" class="form-grid">
+      ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(today())}" required>`)}
+      ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" required placeholder="例：25000">`)}
+      <div class="field wide">
+        <label>備註</label>
+        <textarea class="input" name="note" placeholder="例：5 月稅後收入扣掉儲蓄後可支配預算"></textarea>
+      </div>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">新增全局提撥</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderBudgetContributionForm(edit) {
+  return `
+    <form id="budgetContributionForm" class="form-grid">
+      <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+      ${field("預算項目", `<select class="input" name="budget_item_id" required>${budgetContributionOptions(edit?.budget_item_id || "")}</select>`)}
+      ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(edit?.contribution_date || today())}" required>`)}
+      ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="例：20000">`)}
+      <div class="field wide">
+        <label>備註</label>
+        <textarea class="input" name="note" placeholder="例：出國基金、Live Music 加碼">${escapeHtml(edit?.note || "")}</textarea>
+      </div>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">${edit ? "儲存修改" : "新增項目提撥"}</button>
+        ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetContribution">取消編輯</button>` : ""}
+      </div>
+    </form>
+  `;
+}
+
+function renderBudgetMovementForm(edit) {
+  return `
+    <form id="budgetMovementForm" class="form-grid">
+      <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+      ${field("日期", `<input class="input" type="date" name="movement_date" value="${escapeHtml(edit?.movement_date || today())}" required>`)}
+      ${field("從哪個預算扣", `<select class="input" name="from_budget_item_id" required>${budgetContributionOptions(edit?.from_budget_item_id || "")}</select>`)}
+      ${field("移到哪個預算", `<select class="input" name="to_budget_item_id" required>${budgetContributionOptions(edit?.to_budget_item_id || "")}</select>`)}
+      ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
+      <div class="field wide">
+        <label>備註</label>
+        <textarea class="input" name="note" placeholder="例：月底把日常結餘移到出國">${escapeHtml(edit?.note || "")}</textarea>
+      </div>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">${edit ? "儲存修改" : "新增移轉"}</button>
+        ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetMovement">取消編輯</button>` : ""}
+      </div>
+    </form>
+  `;
+}
+
+function renderBudgetOperationsCard(editYear, editItem, current) {
+  const mode = activeBudgetOperationMode();
+  const titles = {
+    globalContribution: "新增全局預算提撥",
+    itemContribution: state.editing.budgetContribution ? "編輯項目提撥" : "新增項目提撥",
+    movement: state.editing.budgetMovement ? "編輯預算移轉" : "預算項目移轉",
+    item: editItem ? "編輯預算項目" : "新增預算項目",
+    year: "年度基本設定"
+  };
+
+  const desc = {
+    globalContribution: "增加年度母池可用預算。公式：目前可用預算 = 前期結轉 + 全局提撥紀錄合計。",
+    itemContribution: "增加某個 envelope 的額度，例如出國、Live Music、高端餐飲。",
+    movement: "把一個 envelope 的剩餘額度移到另一個 envelope，不會新增收入或支出。",
+    item: "建立或修改 envelope 本身，例如日常花費、出國、Live Music。",
+    year: "低頻設定：年度、名稱、前期結轉、年度刪除與結轉到下一年。"
+  };
+
+  const body = {
+    globalContribution: renderGlobalBudgetContributionForm(),
+    itemContribution: renderBudgetContributionForm(state.editing.budgetContribution),
+    movement: renderBudgetMovementForm(state.editing.budgetMovement),
+    item: renderBudgetItemForm(editItem),
+    year: renderYearSettingsForm(editYear, current)
+  }[mode] || renderGlobalBudgetContributionForm();
+
+  return `
+    <div class="card budget-operation-card">
+      <div class="card-title-row">
+        <h3>預算操作</h3>
+        <span class="badge">${escapeHtml(titles[mode] || "")}</span>
+      </div>
+      <div class="segmented budget-operation-tabs">
+        ${budgetOperationTab("globalContribution", "全局提撥")}
+        ${budgetOperationTab("itemContribution", "項目提撥")}
+        ${budgetOperationTab("movement", "預算移轉")}
+        ${budgetOperationTab("item", "預算項目")}
+        ${budgetOperationTab("year", "年度設定")}
+      </div>
+      <p class="metric-sub">${escapeHtml(desc[mode] || "")}</p>
+      ${body}
+    </div>
+  `;
+}
+
+function renderGlobalBudgetContributionRecords() {
+  const rows = globalBudgetContributionRowsForSelectedYear();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>全局提撥紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderGlobalBudgetContributionTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderBudgetContributionRecords() {
+  const rows = enrichedBudgetContributionsForSelectedYear();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>項目提撥紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetContributionTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderBudgetMovementRecords() {
+  const rows = enrichedBudgetMovementsForSelectedYear();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>預算移轉紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetMovementTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
 function renderBudget() {
   const editYear = state.editing.year;
   const editItem = state.editing.budgetItem;
   const current = getCurrentYearSummary();
   const items = budgetItemSummariesForSelectedYear();
-  const showEditor = Boolean(editYear || editItem || !items.length);
 
   return `
     <div class="grid cols-4">
@@ -2524,8 +2755,6 @@ function renderBudget() {
 
     ${renderBudgetRealityCheck()}
 
-    ${renderGlobalBudgetContributionSection()}
-
     <div class="card budget-focus-card">
       <div class="card-title-row">
         <h3>預算項目</h3>
@@ -2535,76 +2764,17 @@ function renderBudget() {
       ${renderBudgetItemTable(items)}
     </div>
 
-    ${renderBudgetContributionSection(items)}
-
-    ${renderBudgetMovementSection()}
+    ${renderBudgetOperationsCard(editYear, editItem, current)}
 
     ${renderMonthCloseAdvisor()}
 
     ${renderAnnualRolloverCard()}
 
-    <details class="card budget-editor" ${showEditor ? "open" : ""}>
-      <summary>${editYear || editItem ? "正在編輯預算" : "新增 / 編輯年度與預算項目"}</summary>
+    ${renderGlobalBudgetContributionRecords()}
 
-      <div class="grid cols-2" style="margin-top:14px">
-        <div>
-          <h3>${editYear ? "編輯年度" : "年度設定"}</h3>
-          <form id="yearForm" class="form-grid two">
-            <input type="hidden" name="id" value="${escapeHtml(editYear?.id || "")}">
-            ${field("年度", `<input class="input" type="number" name="budget_year" min="2000" max="2100" value="${escapeHtml(editYear?.budget_year || state.selectedBudgetYear)}" required>`)}
-            ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editYear?.name || "")}" placeholder="例：2026 年度預算">`)}
-            ${field("預算模式", `<input class="input" value="提撥紀錄制" disabled><input type="hidden" name="budget_mode" value="monthly_contribution">`)}
-            ${field("年度總預算", `<input class="input" value="${escapeHtml(fmtMoney(current.annual_budget || 0))}" disabled><input type="hidden" name="annual_budget" value="${escapeHtml(current.annual_budget || 0)}">`)}
-            ${field("計算起點", `<input class="input" value="依全局提撥紀錄" disabled><input type="hidden" name="budget_start_mode" value="record_start">`)}
-            ${field("前期結轉", `<input class="input" type="number" step="1" name="carryover_from_previous" value="${escapeHtml(editYear?.carryover_from_previous ?? current.carryover_from_previous ?? 0)}">`)}
-            <div class="field wide">
-              <label>備註</label>
-              <textarea class="input" name="note">${escapeHtml(stripGlobalBudgetContributionsMarker(editYear?.note || ""))}</textarea>
-            </div>
-            <div class="wide btn-row">
-              <button class="btn" type="submit">儲存年度</button>
-              <button class="btn secondary" type="button" data-edit-year="${state.selectedYearId}">載入目前年度編輯</button>
-              <button class="btn secondary" type="button" id="closeYearBtn">結轉到下一年</button>
-              ${editYear ? `<button class="btn danger" type="button" data-delete="years:${editYear.id}">刪除年度</button>` : ""}
-              ${editYear ? `<button class="btn secondary" type="button" data-cancel-edit="year">取消編輯</button>` : ""}
-            </div>
-          </form>
-        </div>
+    ${renderBudgetContributionRecords()}
 
-        <div>
-          <h3>${editItem ? "編輯預算項目" : "新增預算項目"}</h3>
-          <form id="budgetItemForm" class="form-grid two">
-            <input type="hidden" name="id" value="${escapeHtml(editItem?.id || "")}">
-            ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editItem?.name || "")}" required placeholder="例：日常餐飲">`)}
-            ${field("類型", `<select class="input" name="item_type">${selectOpts(["expense","income","saving","other"], editItem?.item_type || "expense")}</select>`)}
-            ${field("金額", `<input class="input" type="number" step="1" name="planned_amount" value="${escapeHtml(editItem?.planned_amount || "")}" required placeholder="固定預算，或每次提撥金額">`)}
-            ${field("分類", `<select class="input" name="category_id">${categoryOptions(editItem?.item_type || "expense", editItem?.category_id || "")}</select>`)}
-            <details class="advanced-fields wide">
-              <summary>進階欄位</summary>
-              <div class="form-grid two">
-                ${field("期間", `<select class="input" name="period_type">${selectOpts(["annual","monthly","weekly","custom"], editItem?.period_type || "annual")}</select>`)}
-                ${field("結轉模式", `<select class="input" name="rollover_mode">${selectOpts(["none","carryover","overspend_to_next"], editItem?.rollover_mode || "none")}</select>`)}
-                ${field("提撥起始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(editItem?.start_date || "")}">`)}
-                ${field("提撥結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(editItem?.end_date || "")}">`)}
-                ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(editItem?.sort_order || 0)}">`)}
-                ${field("啟用", `<select class="input" name="is_active">
-                  <option value="true" ${editItem?.is_active !== false ? "selected" : ""}>啟用</option>
-                  <option value="false" ${editItem?.is_active === false ? "selected" : ""}>停用</option>
-                </select>`)}
-                <div class="field wide">
-                  <label>備註</label>
-                  <textarea class="input" name="note">${escapeHtml(editItem?.note || "")}</textarea>
-                </div>
-              </div>
-            </details>
-            <div class="wide btn-row">
-              <button class="btn" type="submit">${editItem ? "儲存修改" : "新增項目"}</button>
-              ${editItem ? `<button class="btn secondary" type="button" data-cancel-edit="budgetItem">取消編輯</button>` : ""}
-            </div>
-          </form>
-        </div>
-      </div>
-    </details>
+    ${renderBudgetMovementRecords()}
   `;
 }
 
@@ -4533,7 +4703,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v50 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v51 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4572,7 +4742,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v50 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v51 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5182,6 +5352,12 @@ function bindRenderedEvents() {
     }
   });
 
+  $$("[data-budget-operation]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
+    state.budgetOperationMode = btn.dataset.budgetOperation || "globalContribution";
+    render();
+  }));
+
   $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
 
   $$("[data-cancel-edit]").forEach(btn => btn.addEventListener("click", () => {
@@ -5230,7 +5406,9 @@ function bindRenderedEvents() {
     render();
   }));
   $$("[data-edit-budget]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
     state.editing.budgetItem = state.data.budgetItems.find(x => x.id === btn.dataset.editBudget);
+    state.budgetOperationMode = "item";
     window.scrollTo({ top: 0, behavior: "smooth" });
     render();
   }));
@@ -5242,12 +5420,16 @@ function bindRenderedEvents() {
     }
   }));
   $$("[data-edit-contribution]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
     state.editing.budgetContribution = state.data.budgetContributions.find(x => x.id === btn.dataset.editContribution);
+    state.budgetOperationMode = "itemContribution";
     window.scrollTo({ top: 0, behavior: "smooth" });
     render();
   }));
   $$("[data-edit-movement]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
     state.editing.budgetMovement = state.data.budgetMovements.find(x => x.id === btn.dataset.editMovement);
+    state.budgetOperationMode = "movement";
     window.scrollTo({ top: 0, behavior: "smooth" });
     render();
   }));
@@ -5286,7 +5468,9 @@ function bindRenderedEvents() {
     render();
   }));
   $$("[data-edit-year]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
     state.editing.year = state.data.years.find(x => x.id === btn.dataset.editYear);
+    state.budgetOperationMode = "year";
     render();
   }));
 
@@ -5313,7 +5497,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v50 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v51 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }

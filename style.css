@@ -1780,3 +1780,31 @@ td.actions { width: 126px; }
 #globalBudgetContributionForm {
   margin-top: 10px;
 }
+
+
+/* v51：預算操作整合 */
+.budget-operation-card {
+  border-color: rgba(96, 165, 250, 0.22);
+}
+
+.budget-operation-tabs {
+  margin: 12px 0 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.budget-operation-tabs .seg-btn {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 760px) {
+  .budget-operation-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .budget-operation-tabs .seg-btn {
+    width: 100%;
+  }
+}
