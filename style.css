@@ -1768,3 +1768,9 @@ td.actions { width: 126px; }
   border-color: rgba(244, 63, 94, 0.38);
   color: #fecdd3;
 }
+
+
+/* v49：帳戶預算驗算設定 */
+#accountForm [name="coverage_mode"] {
+  font-weight: 700;
+}
