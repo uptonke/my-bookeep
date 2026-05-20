@@ -1262,20 +1262,20 @@ function renderOverview() {
 
     <div class="card">
       <div class="card-title-row">
-        <h3>年度預算進度</h3>
+        <h3>預算使用進度</h3>
         <span class="badge">${fmtNumber(pct, 1)}%</span>
       </div>
       <div class="${progressClass}"><span style="width:${pct}%"></span></div>
-      <p class="metric-sub">可用預算 = 年度預算 + 前年盈餘結轉。支出會扣除退款，只計入狀態不是「已取消」的交易。</p>
+      <p class="metric-sub">可用預算 = 前期結轉 + 全局提撥紀錄合計。支出會扣除退款，只計入狀態不是「已取消」的交易。</p>
     </div>
 
     ${renderChartToolbar()}
 
     <div class="grid cols-2">
       <div class="card chart-card">
-        <div class="card-title-row"><h3>年度預算使用圖</h3><span class="badge">圓環圖</span></div>
+        <div class="card-title-row"><h3>預算使用圖</h3><span class="badge">圓環圖</span></div>
         <div class="chart-canvas-wrap tall"><canvas id="overviewBudgetChart"></canvas></div>
-        <p class="chart-note">這張固定看年度總預算，不受「本月 / 分類」篩選影響。</p>
+        <p class="chart-note">這張固定看年度提撥合計，不受「本月 / 分類」篩選影響。</p>
       </div>
       <div class="card chart-card">
         <div class="card-title-row"><h3>分類淨支出排行</h3><span class="badge">長條圖</span></div>
@@ -2186,7 +2186,7 @@ function renderBudgetAllocationCards() {
   const s = budgetAllocationSummary();
   return `
     <div class="grid cols-3">
-      ${metricCard("預算項目已分配", fmtMoney(s.allocated), "各項目目前可用額度加總")}
+      ${metricCard("項目已分配", fmtMoney(s.allocated), "各項目目前可用額度加總")}
       ${metricCard(s.unallocated >= 0 ? "尚未分配" : "超額分配", fmtMoney(s.unallocated), s.unallocated >= 0 ? "母池尚有空間" : "項目額度超過全局池", s.unallocated >= 0 ? "good" : "bad")}
       ${metricCard("年度結轉型項目", `${annualRolloverRows().length} 項`, "每年 + 餘額結轉")}
     </div>
@@ -2647,7 +2647,7 @@ function renderYearSettingsForm(editYear, current) {
       ${field("年度", `<input class="input" type="number" name="budget_year" min="2000" max="2100" value="${escapeHtml(editYear?.budget_year || state.selectedBudgetYear)}" required>`)}
       ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editYear?.name || "")}" placeholder="例：2026 年度預算">`)}
       ${field("預算模式", `<input class="input" value="提撥紀錄制" disabled><input type="hidden" name="budget_mode" value="monthly_contribution">`)}
-      ${field("年度總預算", `<input class="input" value="${escapeHtml(fmtMoney(current.annual_budget || 0))}" disabled><input type="hidden" name="annual_budget" value="${escapeHtml(current.annual_budget || 0)}">`)}
+      ${field("年度提撥合計", `<input class="input" value="${escapeHtml(fmtMoney(current.annual_budget || 0))}" disabled><input type="hidden" name="annual_budget" value="${escapeHtml(current.annual_budget || 0)}">`)}
       ${field("計算起點", `<input class="input" value="依全局提撥紀錄" disabled><input type="hidden" name="budget_start_mode" value="record_start">`)}
       ${field("前期結轉", `<input class="input" type="number" step="1" name="carryover_from_previous" value="${escapeHtml(editYear?.carryover_from_previous ?? current.carryover_from_previous ?? 0)}">`)}
       <div class="field wide">
@@ -2853,9 +2853,9 @@ function renderBudget() {
   return `
     <div class="grid cols-4">
       ${metricCard("目前可用預算", fmtMoney(current.available_budget), yearBudgetModeLabel(current))}
-      ${metricCard("年度總預算", fmtMoney(current.annual_budget), "全局提撥紀錄合計")}
+      ${metricCard("年度提撥合計", fmtMoney(current.annual_budget), "全局提撥紀錄合計")}
       ${metricCard("已用預算", fmtMoney(current.actual_expense), `${fmtNumber(current.budget_used_pct, 1)}%`, "bad")}
-      ${metricCard("剩餘可用預算", fmtMoney(current.remaining_budget), Number(current.remaining_budget || 0) >= 0 ? "預算內" : "超支", Number(current.remaining_budget || 0) >= 0 ? "good" : "bad")}
+      ${metricCard("剩餘預算", fmtMoney(current.remaining_budget), Number(current.remaining_budget || 0) >= 0 ? "預算內" : "超支", Number(current.remaining_budget || 0) >= 0 ? "good" : "bad")}
     </div>
 
     ${renderBudgetAllocationCards()}
@@ -3874,7 +3874,7 @@ function renderSelectedChartReport() {
       rawNote: true
     },
     budgetUsage: {
-      title: "年度預算使用圖",
+      title: "預算使用圖",
       badge: "圓環圖",
       canvas: "reportsBudgetChart",
       note: "看年度可用預算被使用掉多少。"
@@ -6196,7 +6196,7 @@ async function closeYearToNextYear() {
 
   const ok = await confirmAction(
     "年度結轉",
-    `確定要關閉 ${state.selectedBudgetYear} 年？\n\n${nextYearNumber} 年將使用：\n前期結轉：${fmtMoney(carryover)}\n年度總預算：先由下一年的全局提撥紀錄累積，不再填每次提撥金額。`
+    `確定要關閉 ${state.selectedBudgetYear} 年？\n\n${nextYearNumber} 年將使用：\n前期結轉：${fmtMoney(carryover)}\n年度提撥合計：先由下一年的全局提撥紀錄累積，不再填每次提撥金額。`
   );
   if (!ok) return;
 
