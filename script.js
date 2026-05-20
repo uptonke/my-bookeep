@@ -3399,12 +3399,349 @@ function renderDecisionReports() {
   `;
 }
 
+
+function reportTable(headers, rows, options = {}) {
+  if (!rows.length) return `<div class="empty">${escapeHtml(options.empty || "尚無資料")}</div>`;
+  return `
+    <div class="table-wrap report-table-wrap">
+      <table class="report-table">
+        <thead><tr>${headers.map(h => `<th>${escapeHtml(h.label)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>${headers.map(h => {
+              const value = typeof h.value === "function" ? h.value(row) : row[h.key];
+              const cls = h.className ? ` class="${h.className}"` : "";
+              return `<td${cls}>${h.raw ? value : escapeHtml(value ?? "")}</td>`;
+            }).join("")}</tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function selectedYearActiveTransactions() {
+  return transactionsForSelectedYear().filter(t => t.status !== "cancelled");
+}
+
+function categoryExpenseReportRows() {
+  const rows = new Map();
+  const expenses = selectedYearActiveTransactions().filter(t => ["expense", "refund"].includes(t.type));
+  expenses.forEach(t => {
+    const key = t.category_name || "未分類";
+    if (!rows.has(key)) rows.set(key, { category: key, amount: 0, count: 0, max: 0 });
+    const row = rows.get(key);
+    const amount = Number(t.amount || 0);
+    if (t.type === "expense") {
+      row.amount += amount;
+      row.count += 1;
+      row.max = Math.max(row.max, amount);
+    } else if (t.type === "refund") {
+      row.amount -= amount;
+    }
+  });
+  const total = Array.from(rows.values()).reduce((sum, r) => sum + Math.max(0, r.amount), 0) || 1;
+  return Array.from(rows.values())
+    .filter(r => Math.abs(r.amount) > 0 || r.count > 0)
+    .map(r => ({
+      ...r,
+      share: Math.max(0, r.amount) / total,
+      avg: r.count ? r.amount / r.count : 0
+    }))
+    .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0));
+}
+
+function recurringAnnualizedAmount(r) {
+  const amount = Number(r.amount || 0);
+  const interval = Math.max(1, Number(r.interval_count || 1));
+  const frequency = r.frequency || "monthly";
+  if (frequency === "daily") return amount * 365 / interval;
+  if (frequency === "weekly") return amount * 52 / interval;
+  if (frequency === "monthly") return amount * 12 / interval;
+  if (frequency === "quarterly") return amount * 4 / interval;
+  if (frequency === "yearly" || frequency === "annual") return amount / interval;
+  return amount;
+}
+
+function recurringMonthlyAmount(r) {
+  return recurringAnnualizedAmount(r) / 12;
+}
+
+function recurringReportRows() {
+  const accountMap = Object.fromEntries((state.data.accounts || []).map(a => [a.id, a.name]));
+  const catMap = Object.fromEntries((state.data.categories || []).map(c => [c.id, c.name]));
+  return (state.data.recurring || [])
+    .map(r => ({
+      name: r.name || "",
+      amount: Number(r.amount || 0),
+      account: accountMap[r.account_id] || "",
+      category: catMap[r.category_id] || "",
+      frequency: `${labelOf(r.frequency)} / ${r.interval_count || 1}`,
+      monthly: recurringMonthlyAmount(r),
+      annual: recurringAnnualizedAmount(r),
+      next_due_date: r.next_due_date || "",
+      status: r.is_active === false ? "已取消 / 停用" : "使用中",
+      merchant: r.merchant || ""
+    }))
+    .sort((a, b) => Number(b.annual || 0) - Number(a.annual || 0));
+}
+
+function monthlyComparisonReportRows() {
+  return getMonthlyAnalyticsRows().map(r => {
+    const budgetUsed = Number(getCurrentYearSummary().available_budget || 0)
+      ? Number(r.expense || 0) / Number(getCurrentYearSummary().available_budget || 1)
+      : 0;
+    return {
+      month: r.label,
+      income: r.income,
+      expense: r.expense,
+      net: r.income - r.expense,
+      savingsRate: r.savingsRate === null ? "N/A" : `${fmtNumber(r.savingsRate, 1)}%`,
+      budgetShare: `${fmtNumber(budgetUsed * 100, 1)}%`
+    };
+  });
+}
+
+function necessityReportRows() {
+  const rows = getHealthRows();
+  const total = rows.reduce((sum, r) => sum + Math.max(0, Number(r.amount || 0)), 0) || 1;
+  const countMap = new Map();
+  expenseRowsForSelectedYear().forEach(t => {
+    const key = ["survival", "quality", "luxury", "investment"].includes(t.necessity_level) ? t.necessity_level : "other";
+    if (t.type === "expense") countMap.set(key, Number(countMap.get(key) || 0) + 1);
+  });
+  return rows.map(r => ({
+    ...r,
+    share: Number(r.amount || 0) / total,
+    count: Number(countMap.get(r.key) || 0)
+  }));
+}
+
+function pnlStatementRows() {
+  const tx = selectedYearActiveTransactions();
+  const incomeMap = new Map();
+  const expenseNatureMap = new Map([
+    ["fixed", 0],
+    ["variable", 0],
+    ["one_time", 0],
+    ["other", 0]
+  ]);
+
+  tx.forEach(t => {
+    const amount = Number(t.amount || 0);
+    if (t.type === "income") addAmount(incomeMap, t.category_name || "收入", amount);
+    if (t.type === "expense") {
+      const key = ["fixed", "variable", "one_time"].includes(t.cashflow_nature) ? t.cashflow_nature : "other";
+      expenseNatureMap.set(key, Number(expenseNatureMap.get(key) || 0) + amount);
+    }
+    if (t.type === "refund") {
+      const key = ["fixed", "variable", "one_time"].includes(t.cashflow_nature) ? t.cashflow_nature : "other";
+      expenseNatureMap.set(key, Number(expenseNatureMap.get(key) || 0) - amount);
+    }
+  });
+
+  const incomeRows = mapToSortedRows(incomeMap);
+  const totalIncome = incomeRows.reduce((sum, r) => sum + r.amount, 0);
+  const fixed = Number(expenseNatureMap.get("fixed") || 0);
+  const variable = Number(expenseNatureMap.get("variable") || 0);
+  const oneTime = Number(expenseNatureMap.get("one_time") || 0);
+  const other = Number(expenseNatureMap.get("other") || 0);
+  const totalExpense = fixed + variable + oneTime + other;
+  const net = totalIncome - totalExpense;
+  const savingsRate = totalIncome ? net / totalIncome : null;
+
+  const out = [];
+  out.push({ section: "收入", item: "收入合計", amount: totalIncome, ratio: totalIncome ? "100%" : "N/A", note: "" });
+  incomeRows.forEach(r => out.push({ section: "收入明細", item: r.name, amount: r.amount, ratio: totalIncome ? `${fmtNumber(r.amount / totalIncome * 100, 1)}%` : "N/A", note: "" }));
+  out.push({ section: "支出", item: "固定支出", amount: -fixed, ratio: totalIncome ? `${fmtNumber(fixed / totalIncome * 100, 1)}% of income` : "N/A", note: "" });
+  out.push({ section: "支出", item: "變動支出", amount: -variable, ratio: totalIncome ? `${fmtNumber(variable / totalIncome * 100, 1)}% of income` : "N/A", note: "" });
+  out.push({ section: "支出", item: "一次性支出", amount: -oneTime, ratio: totalIncome ? `${fmtNumber(oneTime / totalIncome * 100, 1)}% of income` : "N/A", note: "" });
+  out.push({ section: "支出", item: "其他 / 未標記", amount: -other, ratio: totalIncome ? `${fmtNumber(other / totalIncome * 100, 1)}% of income` : "N/A", note: "" });
+  out.push({ section: "淨額", item: "淨收支", amount: net, ratio: totalIncome ? `${fmtNumber(net / totalIncome * 100, 1)}%` : "N/A", note: "" });
+  out.push({ section: "淨額", item: "儲蓄率", amount: savingsRate === null ? "N/A" : `${fmtNumber(savingsRate * 100, 1)}%`, ratio: "", note: "(收入 − 淨支出) / 收入" });
+  return out;
+}
+
+function balanceSheetReportRows() {
+  const rows = accountBalanceRowsMerged ? accountBalanceRowsMerged() : (state.data.accountBalances || []);
+  const assetTypes = ["cash", "bank", "e_wallet", "asset", "other"];
+  const liabilityTypes = ["credit_card", "loan"];
+  const out = [];
+
+  rows.filter(a => a.is_active !== false).forEach(a => {
+    const balance = Number(a.current_balance ?? a.initial_balance ?? 0);
+    const type = a.type || "other";
+    if (liabilityTypes.includes(type) || balance < 0) {
+      out.push({
+        section: "負債",
+        account: a.name || "",
+        type: labelOf(type),
+        amount: -Math.abs(balance),
+        note: type === "asset" ? "負值資產帳戶列為負債" : ""
+      });
+    } else if (assetTypes.includes(type)) {
+      out.push({
+        section: "資產",
+        account: a.name || "",
+        type: labelOf(type),
+        amount: balance,
+        note: type === "asset" ? "僅採 App 內維護的帳戶餘額；未納入外部股票 / ETF 即時市值" : ""
+      });
+    }
+  });
+
+  const assets = out.filter(r => r.section === "資產").reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  const liabilities = out.filter(r => r.section === "負債").reduce((sum, r) => sum + Math.abs(Number(r.amount || 0)), 0);
+  out.push({ section: "摘要", account: "資產合計", type: "", amount: assets, note: "" });
+  out.push({ section: "摘要", account: "負債合計", type: "", amount: -liabilities, note: "" });
+  out.push({ section: "摘要", account: "淨資產", type: "", amount: assets - liabilities, note: "股票 / ETF 市值若不在本 App 管理，未納入" });
+  return out;
+}
+
+function renderCategoryExpenseReport() {
+  const rows = categoryExpenseReportRows();
+  return `
+    <details class="card collapsible-card" open>
+      <summary class="collapsible-summary"><span>分類支出表</span><span class="badge">${rows.length} 類</span></summary>
+      <div class="collapsible-body">
+        ${reportTable([
+          { label: "分類", key: "category" },
+          { label: "金額", value: r => fmtMoney(r.amount), className: "mono" },
+          { label: "占比", value: r => `${fmtNumber(r.share * 100, 1)}%` },
+          { label: "筆數", key: "count" },
+          { label: "平均單筆", value: r => fmtMoney(r.avg), className: "mono" },
+          { label: "最大單筆", value: r => fmtMoney(r.max), className: "mono" }
+        ], rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderRecurringReport() {
+  const rows = recurringReportRows();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary"><span>固定支出 / 訂閱表</span><span class="badge">${rows.length} 項</span></summary>
+      <div class="collapsible-body">
+        ${reportTable([
+          { label: "服務名稱", key: "name" },
+          { label: "月化成本", value: r => fmtMoney(r.monthly), className: "mono" },
+          { label: "年化成本", value: r => fmtMoney(r.annual), className: "mono" },
+          { label: "付款帳戶", key: "account" },
+          { label: "分類", key: "category" },
+          { label: "週期", key: "frequency" },
+          { label: "下次扣款", key: "next_due_date" },
+          { label: "狀態", key: "status" }
+        ], rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderMonthlyComparisonReport() {
+  const rows = monthlyComparisonReportRows();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary"><span>月度比較表</span><span class="badge">${rows.length} 月</span></summary>
+      <div class="collapsible-body">
+        ${reportTable([
+          { label: "月份", key: "month" },
+          { label: "收入", value: r => fmtMoney(r.income), className: "mono" },
+          { label: "支出", value: r => fmtMoney(r.expense), className: "mono" },
+          { label: "淨收支", value: r => fmtMoney(r.net), className: "mono" },
+          { label: "儲蓄率", key: "savingsRate" },
+          { label: "占目前可用預算", key: "budgetShare" }
+        ], rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderNecessityReport() {
+  const rows = necessityReportRows();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary"><span>必要程度分析</span><span class="badge">necessity_level</span></summary>
+      <div class="collapsible-body">
+        <p class="metric-sub">若大量交易停留在「其他」，這張表會失真；快速模板最好自動帶入必要程度。</p>
+        ${reportTable([
+          { label: "必要程度", key: "name" },
+          { label: "金額", value: r => fmtMoney(r.amount), className: "mono" },
+          { label: "占比", value: r => `${fmtNumber(r.share * 100, 1)}%` },
+          { label: "筆數", key: "count" }
+        ], rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderPnlReport() {
+  const rows = pnlStatementRows();
+  return `
+    <details class="card collapsible-card" open>
+      <summary class="collapsible-summary"><span>收支損益表 / 個人損益表</span><span class="badge">${state.selectedBudgetYear}</span></summary>
+      <div class="collapsible-body">
+        ${reportTable([
+          { label: "區塊", key: "section" },
+          { label: "項目", key: "item" },
+          { label: "金額", value: r => typeof r.amount === "number" ? fmtMoney(r.amount) : r.amount, className: "mono" },
+          { label: "比例", key: "ratio" },
+          { label: "備註", key: "note" }
+        ], rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderBalanceSheetReport() {
+  const rows = balanceSheetReportRows();
+  return `
+    <details class="card collapsible-card" open>
+      <summary class="collapsible-summary"><span>資產負債表</span><span class="badge">App 內帳戶</span></summary>
+      <div class="collapsible-body">
+        <p class="metric-sub">只採本 App 內帳戶餘額；股票 / ETF 市值如果不在本 App 管理，這張表不會納入外部即時市值。</p>
+        ${reportTable([
+          { label: "區塊", key: "section" },
+          { label: "帳戶 / 項目", key: "account" },
+          { label: "類型", key: "type" },
+          { label: "金額", value: r => fmtMoney(r.amount), className: "mono" },
+          { label: "備註", key: "note" }
+        ], rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderAddedStatementReports() {
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>新增表格式報表</h3>
+        <span class="badge">v53</span>
+      </div>
+      <p class="metric-sub">這些是可讀、可匯出的表格式報表；比單純圖表更適合對帳與檢查口徑。</p>
+    </div>
+    <div class="grid cols-2">
+      ${renderPnlReport()}
+      ${renderBalanceSheetReport()}
+    </div>
+    <div class="grid cols-2">
+      ${renderCategoryExpenseReport()}
+      ${renderRecurringReport()}
+      ${renderMonthlyComparisonReport()}
+      ${renderNecessityReport()}
+    </div>
+  `;
+}
+
 function renderReports() {
   return `
     ${renderChartToolbar()}
     ${renderAnalyticsSummaryCards()}
 
     ${renderDecisionReports()}
+
+    ${renderAddedStatementReports()}
 
     <div class="card chart-card">
       <div class="card-title-row">
@@ -4792,7 +5129,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v52 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v53 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4831,7 +5168,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v52 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v53 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5586,7 +5923,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v52 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v53 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
@@ -5972,10 +6309,22 @@ function exportWorkbookXlsx() {
     e.entry_date, e.side === "debit" ? "借方" : "貸方", e.label || "", Number(e.amount || 0), e.note || ""
   ]);
   const cashflowRows = cashflowStatementRows().map(r => [r.section, r.item, r.amount, r.ratio, r.note]);
+  const categoryExpenseRows = categoryExpenseReportRows().map(r => [r.category, Number(r.amount || 0), `${fmtNumber(r.share * 100, 1)}%`, Number(r.count || 0), Number(r.avg || 0), Number(r.max || 0)]);
+  const recurringRows = recurringReportRows().map(r => [r.name, Number(r.monthly || 0), Number(r.annual || 0), r.account, r.category, r.frequency, r.next_due_date, r.status]);
+  const monthlyRows = monthlyComparisonReportRows().map(r => [r.month, Number(r.income || 0), Number(r.expense || 0), Number(r.net || 0), r.savingsRate, r.budgetShare]);
+  const necessityRows = necessityReportRows().map(r => [r.name, Number(r.amount || 0), `${fmtNumber(r.share * 100, 1)}%`, Number(r.count || 0)]);
+  const pnlRows = pnlStatementRows().map(r => [r.section, r.item, r.amount, r.ratio, r.note]);
+  const balanceRows = balanceSheetReportRows().map(r => [r.section, r.account, r.type, Number(r.amount || 0), r.note]);
 
   const sheets = [
     { name: "流水帳", rows: [["日期","類型","金額","帳戶","轉入帳戶","分類","預算項目","商家","付款方式","必要程度","現金流性質","狀態","備註"], ...txRows] },
     { name: "現金流量表", rows: [["區塊","項目","金額","比例","備註"], ...cashflowRows] },
+    { name: "個人損益表", rows: [["區塊","項目","金額","比例","備註"], ...pnlRows] },
+    { name: "資產負債表", rows: [["區塊","帳戶/項目","類型","金額","備註"], ...balanceRows] },
+    { name: "分類支出表", rows: [["分類","金額","占比","筆數","平均單筆","最大單筆"], ...categoryExpenseRows] },
+    { name: "固定支出訂閱表", rows: [["服務名稱","月化成本","年化成本","付款帳戶","分類","週期","下次扣款","狀態"], ...recurringRows] },
+    { name: "月度比較表", rows: [["月份","收入","支出","淨收支","儲蓄率","占目前可用預算"], ...monthlyRows] },
+    { name: "必要程度分析", rows: [["必要程度","金額","占比","筆數"], ...necessityRows] },
     { name: "預算項目", rows: [["名稱","類型","分類","模式","目前可用","實際","剩餘","使用率","計算方式"], ...budgetRows] },
     { name: "預算提撥", rows: [["日期","預算項目","金額","備註"], ...contributionRows] },
     { name: "預算移轉", rows: [["日期","從","到","金額","備註"], ...movementRows] },

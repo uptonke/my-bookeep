@@ -1822,3 +1822,19 @@ td.actions { width: 126px; }
 #connectionStatus {
   line-height: 1.35;
 }
+
+
+/* v53：表格式報表 */
+.report-table-wrap {
+  max-height: 520px;
+}
+
+.report-table th,
+.report-table td {
+  white-space: nowrap;
+}
+
+.report-table td:last-child {
+  white-space: normal;
+  min-width: 180px;
+}
