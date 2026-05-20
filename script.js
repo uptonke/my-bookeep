@@ -17,6 +17,7 @@ const state = {
   draftRecurringType: "expense",
   budgetOperationMode: "globalContribution",
   reportChartMode: "categoryExpense",
+  reportChartKind: "bar",
   reportChartExpanded: false,
   reportTableMode: "pnl",
   reportAuditMode: "budgetReality",
@@ -1199,7 +1200,15 @@ function render() {
     const mode = btn.dataset.reportMode;
     if (!group || !mode) return;
     state[group] = mode;
-    if (group === "reportChartMode") state.reportChartExpanded = false;
+    if (group === "reportChartMode") {
+      state.reportChartExpanded = false;
+      state.reportChartKind = "bar";
+    }
+    render();
+  }));
+
+  $$("[data-report-chart-kind]").forEach(btn => btn.addEventListener("click", () => {
+    state.reportChartKind = btn.dataset.reportChartKind || "bar";
     render();
   }));
 
@@ -3801,16 +3810,29 @@ function reportTabs(group, tabs) {
 
 function renderSelectedChartReport() {
   const mode = state.reportChartMode || "categoryExpense";
+  const supportsKindToggle = ["categoryExpense", "recurring"].includes(mode);
+  const chartKind = supportsKindToggle ? (state.reportChartKind || "bar") : "bar";
+
   const map = {
-    categoryExpense: {
+    categoryExpense: chartKind === "pie" ? {
+      title: "分類支出圖表",
+      badge: "圓環圖",
+      canvas: "reportsCategoryExpensePieChart",
+      note: "Top 5 分類 + 其他。用來看支出比例，不適合看精準排名。"
+    } : {
       title: "分類支出圖表",
       badge: "長條圖",
       canvas: "reportsCategoryExpenseTableChart",
-      note: "依分類支出表繪製。看哪幾類最吃預算。"
+      note: "依分類支出表繪製。看哪幾類最吃預算；長條圖仍是預設主視角。"
     },
-    recurring: {
+    recurring: chartKind === "pie" ? {
       title: "固定支出 / 訂閱圖表",
-      badge: "長條圖",
+      badge: "圓環圖",
+      canvas: "reportsRecurringPieChart",
+      note: "Top 5 訂閱 + 其他。用來看固定成本占比；精準比較仍看橫向長條圖。"
+    } : {
+      title: "固定支出 / 訂閱圖表",
+      badge: "橫向長條圖",
       canvas: "reportsRecurringChart",
       note: "依固定支出 / 訂閱表繪製，使用年化成本排序。小月費容易被低估，所以用年化看更清楚。"
     },
@@ -3849,8 +3871,7 @@ function renderSelectedChartReport() {
       badge: "80/20",
       canvas: "reportsParetoChart",
       note: renderParetoSummary(),
-      rawNote: true,
-      tall: true
+      rawNote: true
     },
     budgetUsage: {
       title: "年度預算使用圖",
@@ -3871,9 +3892,17 @@ function renderSelectedChartReport() {
       note: "依預算項目比較目前可用額度與實際支出。"
     }
   };
+
   const c = map[mode] || map.categoryExpense;
   const isExpanded = Boolean(state.reportChartExpanded);
   const chartSizeClass = isExpanded ? "expanded" : "compact";
+  const kindToggle = supportsKindToggle ? `
+    <div class="segmented chart-kind-tabs">
+      <button class="seg-btn ${chartKind === "bar" ? "active" : ""}" type="button" data-report-chart-kind="bar">長條圖</button>
+      <button class="seg-btn ${chartKind === "pie" ? "active" : ""}" type="button" data-report-chart-kind="pie">圓環圖</button>
+    </div>
+  ` : "";
+
   return `
     <div class="chart-report-body">
       <div class="card-title-row">
@@ -3883,6 +3912,7 @@ function renderSelectedChartReport() {
           <button class="btn small secondary" type="button" data-report-chart-expand="${isExpanded ? "false" : "true"}">${isExpanded ? "收合" : "放大查看"}</button>
         </div>
       </div>
+      ${kindToggle}
       <div class="chart-canvas-wrap ${chartSizeClass}"><canvas id="${escapeHtml(c.canvas)}"></canvas></div>
       ${c.rawNote ? c.note : `<p class="chart-note">${escapeHtml(c.note || "")}</p>`}
     </div>
@@ -5207,6 +5237,88 @@ function initCharts() {
     });
   };
 
+
+  const topFivePlusOther = (rows, nameKey, valueKey) => {
+    const clean = rows
+      .map(r => ({ name: String(r[nameKey] || "未命名"), amount: Math.max(0, Number(r[valueKey] || 0)) }))
+      .filter(r => r.amount > 0)
+      .sort((a, b) => b.amount - a.amount);
+    const top = clean.slice(0, 5);
+    const otherAmount = clean.slice(5).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    if (otherAmount > 0) top.push({ name: "其他", amount: otherAmount });
+    return top;
+  };
+
+  const makeCategoryExpensePie = id => {
+    const el = document.getElementById(id);
+    const rows = topFivePlusOther(categoryExpenseReportRows(), "category", "amount");
+    if (!el || !rows.length) return;
+    chartInstances[id] = new Chart(el, {
+      type: "doughnut",
+      data: {
+        labels: rows.map(r => r.name),
+        datasets: [{
+          data: rows.map(r => r.amount),
+          backgroundColor: [theme.blue, theme.purple, theme.green, theme.orange, theme.red, "rgba(148, 163, 184, 0.55)"],
+          borderWidth: 0,
+          hoverOffset: 4
+        }]
+      },
+      options: {
+        ...baseOptions,
+        cutout: "70%",
+        plugins: {
+          ...baseOptions.plugins,
+          legend: { ...baseOptions.plugins.legend, position: "bottom" },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const total = rows.reduce((sum, r) => sum + Number(r.amount || 0), 0) || 1;
+                const value = Number(ctx.parsed || 0);
+                return `${ctx.label}：${moneyTooltip(value)}（${fmtNumber(value / total * 100, 1)}%）`;
+              }
+            }
+          }
+        }
+      }
+    });
+  };
+
+  const makeRecurringPie = id => {
+    const el = document.getElementById(id);
+    const rows = topFivePlusOther(recurringReportRows(), "name", "annual");
+    if (!el || !rows.length) return;
+    chartInstances[id] = new Chart(el, {
+      type: "doughnut",
+      data: {
+        labels: rows.map(r => r.name),
+        datasets: [{
+          data: rows.map(r => r.amount),
+          backgroundColor: [theme.purple, theme.blue, theme.green, theme.orange, theme.red, "rgba(148, 163, 184, 0.55)"],
+          borderWidth: 0,
+          hoverOffset: 4
+        }]
+      },
+      options: {
+        ...baseOptions,
+        cutout: "70%",
+        plugins: {
+          ...baseOptions.plugins,
+          legend: { ...baseOptions.plugins.legend, position: "bottom" },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const total = rows.reduce((sum, r) => sum + Number(r.amount || 0), 0) || 1;
+                const value = Number(ctx.parsed || 0);
+                return `${ctx.label}：${moneyTooltip(value)}（${fmtNumber(value / total * 100, 1)}%）`;
+              }
+            }
+          }
+        }
+      }
+    });
+  };
+
   const makeNecessityAnalysisDoughnut = id => {
     const el = document.getElementById(id);
     const rows = necessityReportRows().filter(r => Number(r.amount || 0) > 0);
@@ -5252,7 +5364,9 @@ function initCharts() {
   makeNetWorth("reportsNetWorthChart");
   makePareto("reportsParetoChart");
   makeCategoryExpenseReportBar("reportsCategoryExpenseTableChart");
+  makeCategoryExpensePie("reportsCategoryExpensePieChart");
   makeRecurringReportBar("reportsRecurringChart");
+  makeRecurringPie("reportsRecurringPieChart");
   makeNecessityAnalysisDoughnut("reportsNecessityAnalysisChart");
 }
 
@@ -5519,7 +5633,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v56 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v57 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5558,7 +5672,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v56 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v57 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -6173,7 +6287,15 @@ function bindRenderedEvents() {
     const mode = btn.dataset.reportMode;
     if (!group || !mode) return;
     state[group] = mode;
-    if (group === "reportChartMode") state.reportChartExpanded = false;
+    if (group === "reportChartMode") {
+      state.reportChartExpanded = false;
+      state.reportChartKind = "bar";
+    }
+    render();
+  }));
+
+  $$("[data-report-chart-kind]").forEach(btn => btn.addEventListener("click", () => {
+    state.reportChartKind = btn.dataset.reportChartKind || "bar";
     render();
   }));
 
@@ -6327,7 +6449,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v56 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v57 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
