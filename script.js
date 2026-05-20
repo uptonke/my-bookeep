@@ -20,7 +20,7 @@ const state = {
   reportChartKind: "bar",
   reportChartExpanded: false,
   reportTableMode: "pnl",
-  reportAuditMode: "budgetReality",
+  reportAuditMode: "tAccount",
   data: {
     years: [],
     accounts: [],
@@ -4063,24 +4063,7 @@ function renderTableReportCenter() {
 }
 
 function renderSelectedAuditReport() {
-  const mode = state.reportAuditMode || "budgetReality";
-
-  if (mode === "budgetReality") {
-    return renderBudgetRealityCheck();
-  }
-
-  if (mode === "budgetExecution") {
-    const rows = budgetItemSummariesForSelectedYear();
-    return `
-      <div class="card inner-report-card">
-        <div class="card-title-row">
-          <h3>預算執行表</h3>
-          <span class="badge">${rows.length} 項</span>
-        </div>
-        ${renderBudgetItemTable(rows)}
-      </div>
-    `;
-  }
+  const mode = state.reportAuditMode || "tAccount";
 
   if (mode === "tAccount") {
     return `
@@ -4115,11 +4098,10 @@ function renderAuditReportCenter() {
     <div class="card report-center-card audit-report-card">
       <div class="card-title-row">
         <h3>會計 / 底層驗算</h3>
-        <span class="badge">查帳用</span>
+        <span class="badge">雙分錄</span>
       </div>
+      <p class="metric-sub">預算項目與預算真實性驗算已保留在年度預算頁；報表頁只留會計底層檢查。</p>
       ${reportTabs("reportAuditMode", [
-        { mode: "budgetReality", label: "預算真實性驗算" },
-        { mode: "budgetExecution", label: "預算執行表" },
         { mode: "tAccount", label: "T 字帳" },
         { mode: "entries", label: "分錄明細" }
       ])}
@@ -5633,7 +5615,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v57 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v58 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5672,7 +5654,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v57 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v58 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -6449,7 +6431,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v57 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v58 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
