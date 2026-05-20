@@ -17,6 +17,7 @@ const state = {
   draftRecurringType: "expense",
   budgetOperationMode: "globalContribution",
   reportChartMode: "categoryExpense",
+  reportChartExpanded: false,
   reportTableMode: "pnl",
   reportAuditMode: "budgetReality",
   data: {
@@ -1198,6 +1199,12 @@ function render() {
     const mode = btn.dataset.reportMode;
     if (!group || !mode) return;
     state[group] = mode;
+    if (group === "reportChartMode") state.reportChartExpanded = false;
+    render();
+  }));
+
+  $$("[data-report-chart-expand]").forEach(btn => btn.addEventListener("click", () => {
+    state.reportChartExpanded = btn.dataset.reportChartExpand === "true";
     render();
   }));
 
@@ -3865,13 +3872,18 @@ function renderSelectedChartReport() {
     }
   };
   const c = map[mode] || map.categoryExpense;
+  const isExpanded = Boolean(state.reportChartExpanded);
+  const chartSizeClass = isExpanded ? "expanded" : "compact";
   return `
     <div class="chart-report-body">
       <div class="card-title-row">
         <h3>${escapeHtml(c.title)}</h3>
-        <span class="badge">${escapeHtml(c.badge)}</span>
+        <div class="btn-row compact-actions">
+          <span class="badge">${escapeHtml(c.badge)}</span>
+          <button class="btn small secondary" type="button" data-report-chart-expand="${isExpanded ? "false" : "true"}">${isExpanded ? "收合" : "放大查看"}</button>
+        </div>
       </div>
-      <div class="chart-canvas-wrap ${c.tall ? "tall" : ""}"><canvas id="${escapeHtml(c.canvas)}"></canvas></div>
+      <div class="chart-canvas-wrap ${chartSizeClass}"><canvas id="${escapeHtml(c.canvas)}"></canvas></div>
       ${c.rawNote ? c.note : `<p class="chart-note">${escapeHtml(c.note || "")}</p>`}
     </div>
   `;
@@ -4091,9 +4103,9 @@ function renderReports() {
     ${renderChartToolbar()}
     ${renderAnalyticsSummaryCards()}
 
-    ${renderChartReportCenter()}
-
     ${renderTableReportCenter()}
+
+    ${renderChartReportCenter()}
 
     ${renderAuditReportCenter()}
 
@@ -5182,13 +5194,14 @@ function initCharts() {
       },
       options: {
         ...baseOptions,
+        indexAxis: "y",
         plugins: {
           ...baseOptions.plugins,
-          tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}：${moneyTooltip(ctx.parsed.y)}` } }
+          tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}：${moneyTooltip(ctx.parsed.x)}` } }
         },
         scales: {
-          x: { ticks: { color: theme.muted, maxRotation: 0, autoSkip: false }, grid: { display: false } },
-          y: { ticks: { color: theme.muted, callback: moneyTick }, grid: { color: theme.grid } }
+          x: { ticks: { color: theme.muted, callback: moneyTick }, grid: { color: theme.grid } },
+          y: { ticks: { color: theme.text }, grid: { display: false } }
         }
       }
     });
@@ -5506,7 +5519,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v55 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v56 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5545,7 +5558,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v55 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v56 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -6160,6 +6173,12 @@ function bindRenderedEvents() {
     const mode = btn.dataset.reportMode;
     if (!group || !mode) return;
     state[group] = mode;
+    if (group === "reportChartMode") state.reportChartExpanded = false;
+    render();
+  }));
+
+  $$("[data-report-chart-expand]").forEach(btn => btn.addEventListener("click", () => {
+    state.reportChartExpanded = btn.dataset.reportChartExpand === "true";
     render();
   }));
 
@@ -6308,7 +6327,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v55 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v56 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }

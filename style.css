@@ -1892,3 +1892,50 @@ td.actions { width: 126px; }
     width: 100%;
   }
 }
+
+
+/* v56：報表圖表 compact / expanded */
+.report-center-card.chart-card {
+  padding-bottom: 18px;
+}
+
+.chart-report-body .card-title-row {
+  margin-bottom: 10px;
+}
+
+.compact-actions {
+  align-items: center;
+  gap: 8px;
+}
+
+.report-center-card .chart-canvas-wrap.compact {
+  height: 300px;
+  min-height: 300px;
+}
+
+.report-center-card .chart-canvas-wrap.expanded {
+  height: 520px;
+  min-height: 520px;
+}
+
+.report-center-card .chart-canvas-wrap.tall {
+  height: 340px;
+  min-height: 340px;
+}
+
+@media (max-width: 760px) {
+  .report-center-card .chart-canvas-wrap.compact {
+    height: 240px;
+    min-height: 240px;
+  }
+
+  .report-center-card .chart-canvas-wrap.expanded {
+    height: 420px;
+    min-height: 420px;
+  }
+
+  .compact-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
