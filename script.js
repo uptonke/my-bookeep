@@ -1239,7 +1239,7 @@ function renderOverview() {
 
   return `
     <div class="grid cols-4">
-      ${metricCard("可用年度預算", fmtMoney(s.available_budget), `年度 ${state.selectedBudgetYear}`)}
+      ${metricCard("可用預算", fmtMoney(s.available_budget), `年度 ${state.selectedBudgetYear}`)}
       ${metricCard("實際支出", fmtMoney(s.actual_expense), `使用率 ${fmtNumber(s.budget_used_pct, 1)}%`, "bad")}
       ${metricCard("剩餘預算", fmtMoney(remaining), remaining >= 0 ? "仍在預算內" : "已超支", remaining >= 0 ? "good" : "bad")}
       ${metricCard("實際收入", fmtMoney(s.actual_income), `淨現金流 ${fmtMoney(s.net_cashflow)}`, Number(s.net_cashflow || 0) >= 0 ? "good" : "warn")}
