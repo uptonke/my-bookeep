@@ -1838,3 +1838,57 @@ td.actions { width: 126px; }
   white-space: normal;
   min-width: 180px;
 }
+
+
+/* v54：報表圖表 */
+.report-table-wrap {
+  margin-top: 10px;
+}
+
+@media (max-width: 760px) {
+  .chart-card .chart-canvas-wrap {
+    min-height: 260px;
+  }
+}
+
+
+/* v55：報表頁模式切換 */
+.report-center-card {
+  margin-bottom: 16px;
+}
+
+.report-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+
+.report-mode-tabs .seg-btn {
+  flex: 0 0 auto;
+}
+
+.report-table-mode-body,
+.chart-report-body {
+  margin-top: 8px;
+}
+
+.audit-report-card > .card {
+  box-shadow: none;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.inner-report-card {
+  margin-top: 12px;
+}
+
+@media (max-width: 760px) {
+  .report-mode-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-mode-tabs .seg-btn {
+    width: 100%;
+  }
+}

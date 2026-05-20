@@ -16,6 +16,9 @@ const state = {
   draftTxType: "expense",
   draftRecurringType: "expense",
   budgetOperationMode: "globalContribution",
+  reportChartMode: "categoryExpense",
+  reportTableMode: "pnl",
+  reportAuditMode: "budgetReality",
   data: {
     years: [],
     accounts: [],
@@ -1190,7 +1193,15 @@ function render() {
       await loadAll();
       render();
     });
-    $$("[data-budget-operation]").forEach(btn => btn.addEventListener("click", () => {
+    $$("[data-report-mode]").forEach(btn => btn.addEventListener("click", () => {
+    const group = btn.dataset.reportGroup;
+    const mode = btn.dataset.reportMode;
+    if (!group || !mode) return;
+    state[group] = mode;
+    render();
+  }));
+
+  $$("[data-budget-operation]").forEach(btn => btn.addEventListener("click", () => {
     clearBudgetOperationEditing();
     state.budgetOperationMode = btn.dataset.budgetOperation || "globalContribution";
     render();
@@ -3717,10 +3728,13 @@ function renderAddedStatementReports() {
     <div class="card">
       <div class="card-title-row">
         <h3>新增表格式報表</h3>
-        <span class="badge">v53</span>
+        <span class="badge">v54</span>
       </div>
-      <p class="metric-sub">這些是可讀、可匯出的表格式報表；比單純圖表更適合對帳與檢查口徑。</p>
+      <p class="metric-sub">這些是可讀、可匯出的表格式報表；比單純圖表更適合對帳與檢查口徑。v54 另外把分類支出表、固定支出 / 訂閱表、必要程度分析做成圖表。</p>
     </div>
+
+    ${renderAdditionalReportCharts()}
+
     <div class="grid cols-2">
       ${renderPnlReport()}
       ${renderBalanceSheetReport()}
@@ -3734,94 +3748,364 @@ function renderAddedStatementReports() {
   `;
 }
 
+
+function renderAdditionalReportCharts() {
+  return `
+    <div class="grid cols-2">
+      <div class="card chart-card">
+        <div class="card-title-row">
+          <h3>分類支出圖表</h3>
+          <span class="badge">長條圖</span>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="reportsCategoryExpenseTableChart"></canvas></div>
+        <p class="chart-note">依分類支出表繪製。看哪幾類最吃預算。</p>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-title-row">
+          <h3>固定支出 / 訂閱圖表</h3>
+          <span class="badge">長條圖</span>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="reportsRecurringChart"></canvas></div>
+        <p class="chart-note">依固定支出 / 訂閱表繪製，使用年化成本排序。小月費容易被低估，所以用年化看更清楚。</p>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-title-row">
+          <h3>必要程度分析圖表</h3>
+          <span class="badge">圓環圖</span>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="reportsNecessityAnalysisChart"></canvas></div>
+        <p class="chart-note">依必要程度分析表繪製。若很多交易是「其他」，這張圖會失真。</p>
+      </div>
+    </div>
+  `;
+}
+
+
+function reportModeTab(group, mode, label) {
+  const active = state[group] === mode ? "active" : "";
+  return `<button class="seg-btn ${active}" type="button" data-report-group="${escapeHtml(group)}" data-report-mode="${escapeHtml(mode)}">${escapeHtml(label)}</button>`;
+}
+
+function reportTabs(group, tabs) {
+  return `<div class="segmented report-mode-tabs">${tabs.map(t => reportModeTab(group, t.mode, t.label)).join("")}</div>`;
+}
+
+function renderSelectedChartReport() {
+  const mode = state.reportChartMode || "categoryExpense";
+  const map = {
+    categoryExpense: {
+      title: "分類支出圖表",
+      badge: "長條圖",
+      canvas: "reportsCategoryExpenseTableChart",
+      note: "依分類支出表繪製。看哪幾類最吃預算。"
+    },
+    recurring: {
+      title: "固定支出 / 訂閱圖表",
+      badge: "長條圖",
+      canvas: "reportsRecurringChart",
+      note: "依固定支出 / 訂閱表繪製，使用年化成本排序。小月費容易被低估，所以用年化看更清楚。"
+    },
+    necessity: {
+      title: "必要程度分析圖表",
+      badge: "圓環圖",
+      canvas: "reportsNecessityAnalysisChart",
+      note: "依必要程度分析表繪製。若很多交易是「其他」，這張圖會失真。"
+    },
+    necessityTrend: {
+      title: "必要程度月度趨勢",
+      badge: "折線圖",
+      canvas: "reportsHealthTrend",
+      note: "看奢侈娛樂、生活品質、自我投資等必要程度是否逐月膨脹。"
+    },
+    monthly: {
+      title: state.filters.chartScope === "month" ? "本月日度收支趨勢" : "月度收支趨勢",
+      badge: "折線圖",
+      canvas: "reportsMonthlyChart",
+      note: `${chartScopeText()}。用來看收支節奏是否失控。`
+    },
+    savingsRate: {
+      title: "儲蓄率",
+      badge: "每月",
+      canvas: "reportsSavingsRateChart",
+      note: "公式：(收入 − 淨支出) / 收入。轉帳不計入收入或支出。"
+    },
+    netWorth: {
+      title: "帳面淨資產",
+      badge: "帳戶餘額",
+      canvas: "reportsNetWorthChart",
+      note: "依帳戶期初餘額 + 累積收支估算；不等於外部股票 / ETF 即時市值。"
+    },
+    pareto: {
+      title: "帕累托分析：哪幾類吃掉大部分支出",
+      badge: "80/20",
+      canvas: "reportsParetoChart",
+      note: renderParetoSummary(),
+      rawNote: true,
+      tall: true
+    },
+    budgetUsage: {
+      title: "年度預算使用圖",
+      badge: "圓環圖",
+      canvas: "reportsBudgetChart",
+      note: "看年度可用預算被使用掉多少。"
+    },
+    categoryNet: {
+      title: "分類淨支出排行",
+      badge: "長條圖",
+      canvas: "reportsCategoryChart",
+      note: `${chartScopeText()}。退款會從原分類扣回。`
+    },
+    budgetCompare: {
+      title: "預算 vs 實際",
+      badge: "橫向長條圖",
+      canvas: "reportsBudgetCompareChart",
+      note: "依預算項目比較目前可用額度與實際支出。"
+    }
+  };
+  const c = map[mode] || map.categoryExpense;
+  return `
+    <div class="chart-report-body">
+      <div class="card-title-row">
+        <h3>${escapeHtml(c.title)}</h3>
+        <span class="badge">${escapeHtml(c.badge)}</span>
+      </div>
+      <div class="chart-canvas-wrap ${c.tall ? "tall" : ""}"><canvas id="${escapeHtml(c.canvas)}"></canvas></div>
+      ${c.rawNote ? c.note : `<p class="chart-note">${escapeHtml(c.note || "")}</p>`}
+    </div>
+  `;
+}
+
+function renderChartReportCenter() {
+  return `
+    <div class="card chart-card report-center-card">
+      <div class="card-title-row">
+        <h3>圖表報表</h3>
+        <span class="badge">模式切換</span>
+      </div>
+      ${reportTabs("reportChartMode", [
+        { mode: "categoryExpense", label: "分類支出" },
+        { mode: "recurring", label: "固定支出 / 訂閱" },
+        { mode: "necessity", label: "必要程度" },
+        { mode: "necessityTrend", label: "必要程度趨勢" },
+        { mode: "monthly", label: "月度比較" },
+        { mode: "savingsRate", label: "儲蓄率" },
+        { mode: "netWorth", label: "帳面淨資產" },
+        { mode: "pareto", label: "帕累托" },
+        { mode: "budgetUsage", label: "預算使用" },
+        { mode: "categoryNet", label: "分類淨支出" },
+        { mode: "budgetCompare", label: "預算 vs 實際" }
+      ])}
+      ${renderSelectedChartReport()}
+    </div>
+  `;
+}
+
+function renderSelectedTableReport() {
+  const mode = state.reportTableMode || "pnl";
+
+  if (mode === "cashflow") {
+    return reportTable([
+      { label: "區塊", key: "section" },
+      { label: "項目", key: "item" },
+      { label: "金額", value: r => typeof r.amount === "number" ? fmtMoney(r.amount) : r.amount, className: "mono" },
+      { label: "比例", key: "ratio" },
+      { label: "備註", key: "note" }
+    ], cashflowStatementRows());
+  }
+
+  if (mode === "pnl") {
+    return reportTable([
+      { label: "區塊", key: "section" },
+      { label: "項目", key: "item" },
+      { label: "金額", value: r => typeof r.amount === "number" ? fmtMoney(r.amount) : r.amount, className: "mono" },
+      { label: "比例", key: "ratio" },
+      { label: "備註", key: "note" }
+    ], pnlStatementRows());
+  }
+
+  if (mode === "balance") {
+    return `
+      <p class="metric-sub">只採本 App 內帳戶餘額；股票 / ETF 市值如果不在本 App 管理，這張表不會納入外部即時市值。</p>
+      ${reportTable([
+        { label: "區塊", key: "section" },
+        { label: "帳戶 / 項目", key: "account" },
+        { label: "類型", key: "type" },
+        { label: "金額", value: r => fmtMoney(r.amount), className: "mono" },
+        { label: "備註", key: "note" }
+      ], balanceSheetReportRows())}
+    `;
+  }
+
+  if (mode === "category") {
+    return reportTable([
+      { label: "分類", key: "category" },
+      { label: "金額", value: r => fmtMoney(r.amount), className: "mono" },
+      { label: "占比", value: r => `${fmtNumber(r.share * 100, 1)}%` },
+      { label: "筆數", key: "count" },
+      { label: "平均單筆", value: r => fmtMoney(r.avg), className: "mono" },
+      { label: "最大單筆", value: r => fmtMoney(r.max), className: "mono" }
+    ], categoryExpenseReportRows());
+  }
+
+  if (mode === "recurring") {
+    return reportTable([
+      { label: "服務名稱", key: "name" },
+      { label: "月化成本", value: r => fmtMoney(r.monthly), className: "mono" },
+      { label: "年化成本", value: r => fmtMoney(r.annual), className: "mono" },
+      { label: "付款帳戶", key: "account" },
+      { label: "分類", key: "category" },
+      { label: "週期", key: "frequency" },
+      { label: "下次扣款", key: "next_due_date" },
+      { label: "狀態", key: "status" }
+    ], recurringReportRows());
+  }
+
+  if (mode === "monthly") {
+    return reportTable([
+      { label: "月份", key: "month" },
+      { label: "收入", value: r => fmtMoney(r.income), className: "mono" },
+      { label: "支出", value: r => fmtMoney(r.expense), className: "mono" },
+      { label: "淨收支", value: r => fmtMoney(r.net), className: "mono" },
+      { label: "儲蓄率", key: "savingsRate" },
+      { label: "占目前可用預算", key: "budgetShare" }
+    ], monthlyComparisonReportRows());
+  }
+
+  if (mode === "necessity") {
+    return `
+      <p class="metric-sub">若大量交易停留在「其他」，這張表會失真；快速模板最好自動帶入必要程度。</p>
+      ${reportTable([
+        { label: "必要程度", key: "name" },
+        { label: "金額", value: r => fmtMoney(r.amount), className: "mono" },
+        { label: "占比", value: r => `${fmtNumber(r.share * 100, 1)}%` },
+        { label: "筆數", key: "count" }
+      ], necessityReportRows())}
+    `;
+  }
+
+  return `<div class="empty">未知報表模式。</div>`;
+}
+
+function renderTableReportCenter() {
+  const labels = {
+    cashflow: "現金流量表",
+    pnl: "個人損益表",
+    balance: "資產負債表",
+    category: "分類支出表",
+    recurring: "固定支出 / 訂閱表",
+    monthly: "月度比較表",
+    necessity: "必要程度分析表"
+  };
+  return `
+    <div class="card report-center-card">
+      <div class="card-title-row">
+        <h3>表格式報表</h3>
+        <span class="badge">${escapeHtml(labels[state.reportTableMode] || labels.pnl)}</span>
+      </div>
+      ${reportTabs("reportTableMode", [
+        { mode: "cashflow", label: "現金流量表" },
+        { mode: "pnl", label: "個人損益表" },
+        { mode: "balance", label: "資產負債表" },
+        { mode: "category", label: "分類支出表" },
+        { mode: "recurring", label: "固定支出 / 訂閱表" },
+        { mode: "monthly", label: "月度比較表" },
+        { mode: "necessity", label: "必要程度分析表" }
+      ])}
+      <div class="report-table-mode-body">
+        ${renderSelectedTableReport()}
+      </div>
+    </div>
+  `;
+}
+
+function renderSelectedAuditReport() {
+  const mode = state.reportAuditMode || "budgetReality";
+
+  if (mode === "budgetReality") {
+    return renderBudgetRealityCheck();
+  }
+
+  if (mode === "budgetExecution") {
+    const rows = budgetItemSummariesForSelectedYear();
+    return `
+      <div class="card inner-report-card">
+        <div class="card-title-row">
+          <h3>預算執行表</h3>
+          <span class="badge">${rows.length} 項</span>
+        </div>
+        ${renderBudgetItemTable(rows)}
+      </div>
+    `;
+  }
+
+  if (mode === "tAccount") {
+    return `
+      <div class="card inner-report-card">
+        <div class="card-title-row">
+          <h3>T 字帳</h3>
+          <span class="badge">依科目分組</span>
+        </div>
+        <p class="metric-sub">支出：借記費用、貸記資產；收入：借記資產、貸記收入；轉帳：借記轉入資產、貸記轉出資產。</p>
+        ${renderTAccountCards()}
+      </div>
+    `;
+  }
+
+  if (mode === "entries") {
+    return `
+      <div class="card inner-report-card">
+        <div class="card-title-row">
+          <h3>分錄明細</h3>
+          <span class="badge">雙分錄</span>
+        </div>
+        ${renderTAccountTable()}
+      </div>
+    `;
+  }
+
+  return `<div class="empty">未知驗算模式。</div>`;
+}
+
+function renderAuditReportCenter() {
+  return `
+    <div class="card report-center-card audit-report-card">
+      <div class="card-title-row">
+        <h3>會計 / 底層驗算</h3>
+        <span class="badge">查帳用</span>
+      </div>
+      ${reportTabs("reportAuditMode", [
+        { mode: "budgetReality", label: "預算真實性驗算" },
+        { mode: "budgetExecution", label: "預算執行表" },
+        { mode: "tAccount", label: "T 字帳" },
+        { mode: "entries", label: "分錄明細" }
+      ])}
+      ${renderSelectedAuditReport()}
+    </div>
+  `;
+}
+
 function renderReports() {
   return `
     ${renderChartToolbar()}
     ${renderAnalyticsSummaryCards()}
 
-    ${renderDecisionReports()}
+    ${renderChartReportCenter()}
 
-    ${renderAddedStatementReports()}
+    ${renderTableReportCenter()}
 
-    <div class="card chart-card">
-      <div class="card-title-row">
-        <h3>消費健康度儀表板</h3>
-        <span class="badge">necessity_level</span>
-      </div>
-      <div class="grid cols-2">
-        <div>
-          <div class="chart-canvas-wrap"><canvas id="reportsHealthDoughnut"></canvas></div>
-          <p class="chart-note">依「生存必要 / 生活品質 / 奢侈娛樂 / 自我投資」拆解淨支出。</p>
-        </div>
-        <div>
-          <div class="chart-canvas-wrap"><canvas id="reportsHealthTrend"></canvas></div>
-          <p class="chart-note">看 luxury 是否逐月膨脹；若交易都維持預設「其他」，這張圖會失真。</p>
-        </div>
-      </div>
-    </div>
+    ${renderAuditReportCenter()}
 
-    <div class="grid cols-2">
-      <div class="card chart-card">
-        <div class="card-title-row"><h3>儲蓄率</h3><span class="badge">每月</span></div>
-        <div class="chart-canvas-wrap"><canvas id="reportsSavingsRateChart"></canvas></div>
-        <p class="chart-note">公式：(收入 − 淨支出) / 收入。只顯示記帳開始後的月份；轉帳不計入收入或支出。</p>
-      </div>
-      <div class="card chart-card">
-        <div class="card-title-row"><h3>帳面淨資產</h3><span class="badge">帳戶餘額</span></div>
-        <div class="chart-canvas-wrap"><canvas id="reportsNetWorthChart"></canvas></div>
-        <p class="chart-note">依帳戶期初餘額 + 累積收支估算；只顯示記帳開始後的月份，不等於股票即時市值。若資料點很少，縱軸會自動縮放，不一定從 0 開始。</p>
-      </div>
-    </div>
-
-    <div class="card chart-card">
-      <div class="card-title-row">
-        <h3>帕累托分析：哪幾類吃掉大部分支出</h3>
-        <span class="badge">80/20</span>
-      </div>
-      <div class="chart-canvas-wrap tall"><canvas id="reportsParetoChart"></canvas></div>
-      ${renderParetoSummary()}
-    </div>
-
-    <div class="grid cols-2">
-      <div class="card chart-card">
-        <div class="card-title-row"><h3>年度預算使用圖</h3><span class="badge">圓環圖</span></div>
-        <div class="chart-canvas-wrap"><canvas id="reportsBudgetChart"></canvas></div>
-      </div>
-      <div class="card chart-card">
-        <div class="card-title-row"><h3>分類淨支出排行</h3><span class="badge">長條圖</span></div>
-        <div class="chart-canvas-wrap"><canvas id="reportsCategoryChart"></canvas></div>
-      </div>
-      <div class="card chart-card">
-        <div class="card-title-row"><h3>${state.filters.chartScope === "month" ? "本月日度收支趨勢" : "月度收支趨勢"}</h3><span class="badge">折線圖</span></div>
-        <div class="chart-canvas-wrap"><canvas id="reportsMonthlyChart"></canvas></div>
-      </div>
-      <div class="card chart-card">
-        <div class="card-title-row"><h3>預算 vs 實際</h3><span class="badge">橫向長條圖</span></div>
-        <div class="chart-canvas-wrap"><canvas id="reportsBudgetCompareChart"></canvas></div>
-      </div>
-    </div>
-
-    <div class="card chart-card">
-      <div class="card-title-row"><h3>分類預算進度</h3><span class="badge">進度條</span></div>
-      ${renderBudgetProgressList(12)}
-    </div>
-
-    <div class="card wrapped-card">
-      <div class="card-title-row">
-        <h3>年度財務 Wrapped</h3>
+    <details class="card wrapped-card">
+      <summary class="collapsible-summary">
+        <span>年度財務 Wrapped</span>
         <span class="badge">${state.selectedBudgetYear}</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderFinancialWrapped()}
       </div>
-      ${renderFinancialWrapped()}
-    </div>
-
-    <div class="card">
-      <div class="card-title-row">
-        <h3>T 字帳</h3>
-        <span class="badge">依科目分組</span>
-      </div>
-      <p class="metric-sub">同一筆交易會同時進入借方科目與貸方科目。支出：借記費用、貸記資產；收入：借記資產、貸記收入；轉帳：借記轉入資產、貸記轉出資產。</p>
-      ${renderTAccountCards()}
-    </div>
+    </details>
   `;
 }
 
@@ -4855,6 +5139,96 @@ function initCharts() {
     });
   };
 
+
+  const makeCategoryExpenseReportBar = id => {
+    const el = document.getElementById(id);
+    const rows = categoryExpenseReportRows().slice(0, 10);
+    if (!el || !rows.length) return;
+    chartInstances[id] = new Chart(el, {
+      type: "bar",
+      data: {
+        labels: rows.map(r => r.category),
+        datasets: [
+          { label: "分類支出", data: rows.map(r => r.amount), backgroundColor: theme.blue, borderRadius: 10, borderSkipped: false }
+        ]
+      },
+      options: {
+        ...baseOptions,
+        indexAxis: "y",
+        plugins: {
+          ...baseOptions.plugins,
+          tooltip: { callbacks: { label: ctx => `${ctx.label}：${moneyTooltip(ctx.parsed.x)}` } }
+        },
+        scales: {
+          x: { ticks: { color: theme.muted, callback: moneyTick }, grid: { color: theme.grid } },
+          y: { ticks: { color: theme.muted }, grid: { display: false } }
+        }
+      }
+    });
+  };
+
+  const makeRecurringReportBar = id => {
+    const el = document.getElementById(id);
+    const rows = recurringReportRows().slice(0, 10);
+    if (!el || !rows.length) return;
+    chartInstances[id] = new Chart(el, {
+      type: "bar",
+      data: {
+        labels: rows.map(r => r.name),
+        datasets: [
+          { label: "年化成本", data: rows.map(r => r.annual), backgroundColor: theme.purple, borderRadius: 10, borderSkipped: false },
+          { label: "月化成本", data: rows.map(r => r.monthly), backgroundColor: "rgba(96, 165, 250, 0.35)", borderRadius: 10, borderSkipped: false }
+        ]
+      },
+      options: {
+        ...baseOptions,
+        plugins: {
+          ...baseOptions.plugins,
+          tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}：${moneyTooltip(ctx.parsed.y)}` } }
+        },
+        scales: {
+          x: { ticks: { color: theme.muted, maxRotation: 0, autoSkip: false }, grid: { display: false } },
+          y: { ticks: { color: theme.muted, callback: moneyTick }, grid: { color: theme.grid } }
+        }
+      }
+    });
+  };
+
+  const makeNecessityAnalysisDoughnut = id => {
+    const el = document.getElementById(id);
+    const rows = necessityReportRows().filter(r => Number(r.amount || 0) > 0);
+    if (!el || !rows.length) return;
+    chartInstances[id] = new Chart(el, {
+      type: "doughnut",
+      data: {
+        labels: rows.map(r => r.name),
+        datasets: [{
+          data: rows.map(r => r.amount),
+          backgroundColor: [theme.green, theme.blue, theme.orange, theme.purple, theme.red].slice(0, rows.length),
+          borderWidth: 0
+        }]
+      },
+      options: {
+        ...baseOptions,
+        cutout: "70%",
+        plugins: {
+          ...baseOptions.plugins,
+          legend: { ...baseOptions.plugins.legend, position: "bottom" },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const total = rows.reduce((sum, r) => sum + Number(r.amount || 0), 0) || 1;
+                const value = Number(ctx.parsed || 0);
+                return `${ctx.label}：${moneyTooltip(value)}（${fmtNumber(value / total * 100, 1)}%）`;
+              }
+            }
+          }
+        }
+      }
+    });
+  };
+
+
   ["overviewBudgetChart", "reportsBudgetChart"].forEach(makeDoughnut);
   ["overviewCategoryChart", "reportsCategoryChart"].forEach(makeCategoryBar);
   ["overviewMonthlyChart", "reportsMonthlyChart"].forEach(makeTrendLine);
@@ -4864,6 +5238,9 @@ function initCharts() {
   makeSavingsRate("reportsSavingsRateChart");
   makeNetWorth("reportsNetWorthChart");
   makePareto("reportsParetoChart");
+  makeCategoryExpenseReportBar("reportsCategoryExpenseTableChart");
+  makeRecurringReportBar("reportsRecurringChart");
+  makeNecessityAnalysisDoughnut("reportsNecessityAnalysisChart");
 }
 
 
@@ -5129,7 +5506,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v53 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v55 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5168,7 +5545,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v53 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v55 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5778,6 +6155,14 @@ function bindRenderedEvents() {
     }
   });
 
+  $$("[data-report-mode]").forEach(btn => btn.addEventListener("click", () => {
+    const group = btn.dataset.reportGroup;
+    const mode = btn.dataset.reportMode;
+    if (!group || !mode) return;
+    state[group] = mode;
+    render();
+  }));
+
   $$("[data-budget-operation]").forEach(btn => btn.addEventListener("click", () => {
     clearBudgetOperationEditing();
     state.budgetOperationMode = btn.dataset.budgetOperation || "globalContribution";
@@ -5923,7 +6308,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v53 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v55 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }
