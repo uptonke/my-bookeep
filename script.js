@@ -65,7 +65,19 @@ const state = {
     chartScope: "year",
     chartCategory: ""
   },
-  loadErrors: []
+  loadErrors: [],
+  dbStatus: {
+    connected: false,
+    connectionText: "尚未連線",
+    lastReadAt: null,
+    lastReadOk: null,
+    lastReadError: "",
+    lastWriteAt: null,
+    lastWriteOk: null,
+    lastWriteAction: "",
+    lastWriteTable: "",
+    lastWriteError: ""
+  }
 };
 
 const pageMeta = {
@@ -335,10 +347,78 @@ function syncPageChrome() {
 }
 
 function setConnection(ok, text) {
+  state.dbStatus.connected = Boolean(ok);
+  state.dbStatus.connectionText = text || (ok ? "已連線" : "未連線");
+
   const dot = $("#connectionDot");
   const status = $("#connectionStatus");
+  if (!dot || !status) return;
+
+  const write = state.dbStatus.lastWriteOk === true
+    ? "｜最後寫入成功"
+    : state.dbStatus.lastWriteOk === false
+      ? "｜最後寫入失敗"
+      : "";
   dot.className = `status-dot ${ok ? "ok" : "bad"}`;
-  status.textContent = text;
+  status.textContent = ok ? `資料庫：已連線${write}` : `資料庫：${text || "未連線"}`;
+}
+
+function shortDateTime(value) {
+  if (!value) return "N/A";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "N/A";
+  return d.toLocaleString("zh-TW", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function markReadStatus(ok, error = "") {
+  state.dbStatus.lastReadAt = new Date().toISOString();
+  state.dbStatus.lastReadOk = Boolean(ok);
+  state.dbStatus.lastReadError = error || "";
+  setConnection(Boolean(ok), ok ? "已連線" : "讀取失敗");
+}
+
+function markWriteStatus(ok, { action = "", table = "", error = "" } = {}) {
+  state.dbStatus.lastWriteAt = new Date().toISOString();
+  state.dbStatus.lastWriteOk = Boolean(ok);
+  state.dbStatus.lastWriteAction = action || "";
+  state.dbStatus.lastWriteTable = table || "";
+  state.dbStatus.lastWriteError = error || "";
+  setConnection(state.dbStatus.connected, state.dbStatus.connectionText || "已連線");
+}
+
+function renderDatabaseStatusCard() {
+  const s = state.dbStatus;
+  const connectedText = s.connected ? "已連線" : s.connectionText || "未連線";
+  const readText = s.lastReadOk === true
+    ? `成功｜${shortDateTime(s.lastReadAt)}`
+    : s.lastReadOk === false
+      ? `失敗｜${shortDateTime(s.lastReadAt)}`
+      : "N/A";
+  const writeText = s.lastWriteOk === true
+    ? `成功｜${shortDateTime(s.lastWriteAt)}${s.lastWriteTable ? `｜${tableLabel(s.lastWriteTable)}` : ""}`
+    : s.lastWriteOk === false
+      ? `失敗｜${shortDateTime(s.lastWriteAt)}${s.lastWriteTable ? `｜${tableLabel(s.lastWriteTable)}` : ""}`
+      : "N/A";
+
+  return `
+    <div class="card database-status-card">
+      <div class="card-title-row">
+        <h3>資料庫狀態</h3>
+        <span class="badge ${s.connected ? "good" : "bad"}">${escapeHtml(connectedText)}</span>
+      </div>
+      <div class="grid cols-3">
+        ${metricCard("連線", escapeHtml(connectedText), "資料庫連線狀態", s.connected ? "good" : "bad")}
+        ${metricCard("最後讀取", escapeHtml(readText), s.lastReadError ? escapeHtml(s.lastReadError) : "讀取資料表 / 檢視表")}
+        ${metricCard("最後寫入", escapeHtml(writeText), s.lastWriteError ? escapeHtml(s.lastWriteError) : "新增 / 修改 / 刪除驗證")}
+      </div>
+      <p class="metric-sub">已整合連線與寫入狀態；錯誤時才顯示資料表與錯誤細節。</p>
+    </div>
+  `;
 }
 
 function optionList(rows, selected, label = "name", value = "id", placeholder = "請選擇") {
@@ -1034,10 +1114,10 @@ async function loadAll() {
 
     if (errors.length) {
       console.warn("部分資料讀取失敗", errors);
-      setConnection(false, "部分資料讀取失敗");
+      markReadStatus(false, errors.slice(0, 3).join("；"));
       showAlert(`部分資料讀取失敗：${escapeHtml(errors.slice(0, 3).join("；"))}${errors.length > 3 ? "……" : ""}`, "warn");
     } else {
-      setConnection(true, "已連線");
+      markReadStatus(true);
     }
 
     renderYearSelect();
@@ -3916,11 +3996,13 @@ function renderMobileMore() {
 
 function renderSettings() {
   return `
+    ${renderDatabaseStatusCard()}
+
     <div class="grid cols-2">
       <div class="card">
         <h3>連線設定</h3>
-        <p class="metric-sub">目前已使用設定檔連到後端資料庫。</p>
-        <p class="metric-sub">若讀不到資料，先確認：已在後端資料庫編輯器執行資料庫結構檔，且沒有直接開啟列層級安全規則導致缺少存取規則。</p>
+        <p class="metric-sub">狀態已整合為「資料庫狀態」：連線、最後讀取、最後寫入。不要再分開看 Supabase / 後端 / 資料庫。</p>
+        <p class="metric-sub">若讀不到資料，先確認：已在資料庫編輯器執行結構檔，且沒有直接開啟列層級安全規則導致缺少存取規則。</p>
       </div>
       <div class="card">
         <h3>資料匯出</h3>
@@ -4576,7 +4658,9 @@ async function writeRow(table, payload, options = {}) {
   }
 
   if (response.error) {
-    throw new Error(`${action}失敗：${formatSupabaseError(response.error)}｜表：${table}`);
+    const message = `${action}失敗：${formatSupabaseError(response.error)}｜表：${table}`;
+    markWriteStatus(false, { action, table, error: formatSupabaseError(response.error) });
+    throw new Error(message);
   }
 
   const saved = assertSavedRow(table, response.data, action);
@@ -4591,6 +4675,7 @@ async function writeRow(table, payload, options = {}) {
   }
 
   const verified = await verifyRowExists(table, saved.id, action);
+  markWriteStatus(true, { action, table });
   return verified;
 }
 
@@ -4625,6 +4710,7 @@ async function removeRow(table, id) {
     .eq("id", id);
 
   if (response.error) {
+    markWriteStatus(false, { action: "刪除", table, error: formatSupabaseError(response.error) });
     throw new Error(`刪除失敗：${formatSupabaseError(response.error)}｜表：${table}`);
   }
 
@@ -4638,9 +4724,12 @@ async function removeRow(table, id) {
     throw new Error(`刪除驗證失敗：${formatSupabaseError(verify.error)}｜表：${table}`);
   }
   if (verify.data) {
-    throw new Error(`刪除驗證失敗：資料仍存在。表：${table}，id=${id}`);
+    const message = `刪除驗證失敗：資料仍存在。表：${table}，id=${id}`;
+    markWriteStatus(false, { action: "刪除", table, error: message });
+    throw new Error(message);
   }
 
+  markWriteStatus(true, { action: "刪除", table });
   return true;
 }
 
@@ -4703,7 +4792,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v51 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v52 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -4742,7 +4831,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v51 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v52 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5497,7 +5586,7 @@ function bindRenderedEvents() {
       await loadAll();
       clearEditing();
       render();
-      showAlert(`v51 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
+      showAlert(`v52 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
     } catch (error) {
       showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
     }

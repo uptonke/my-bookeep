@@ -1808,3 +1808,17 @@ td.actions { width: 126px; }
     width: 100%;
   }
 }
+
+
+/* v52：資料庫狀態整合 */
+.database-status-card {
+  border-color: rgba(96, 165, 250, 0.24);
+}
+
+.sidebar-footer {
+  align-items: flex-start;
+}
+
+#connectionStatus {
+  line-height: 1.35;
+}
