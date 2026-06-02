@@ -13,9 +13,24 @@
       if (tableName === "v_transaction_details") {
         return {
           select: async columns => {
-            const res = await originalFrom("transactions").select(columns || "*");
-            if (res.error) return res;
-            return { data: (res.data || []).map(normalizeTransactionDetail), error: null };
+            const txRes = await originalFrom("transactions").select(columns || "*");
+            if (txRes.error) return txRes;
+
+            const [accountsRes, categoriesRes, budgetItemsRes] = await Promise.allSettled([
+              originalFrom("accounts").select("*"),
+              originalFrom("categories").select("*"),
+              originalFrom("budget_items").select("*")
+            ]);
+
+            const valueOrEmpty = settled => settled.status === "fulfilled" && !settled.value.error ? (settled.value.data || []) : [];
+            const mapById = rows => new Map((rows || []).map(row => [row.id, row]));
+            const lookups = {
+              accounts: mapById(valueOrEmpty(accountsRes)),
+              categories: mapById(valueOrEmpty(categoriesRes)),
+              budgetItems: mapById(valueOrEmpty(budgetItemsRes))
+            };
+
+            return { data: (txRes.data || []).map(t => normalizeTransactionDetail(t, lookups)), error: null };
           }
         };
       }
@@ -60,18 +75,23 @@
   });
 })();
 
-function normalizeTransactionDetail(t) {
+function normalizeTransactionDetail(t, lookups = {}) {
   const date = String(t.transaction_date || "");
   const year = Number(date.slice(0, 4)) || null;
   const month = Number(date.slice(5, 7)) || null;
+  const account = lookups.accounts?.get?.(t.account_id) || {};
+  const toAccount = lookups.accounts?.get?.(t.to_account_id) || {};
+  const category = lookups.categories?.get?.(t.category_id) || {};
+  const budgetItem = lookups.budgetItems?.get?.(t.budget_item_id) || {};
+
   return {
     ...t,
     tx_year: t.tx_year ?? year,
     tx_month: t.tx_month ?? month,
-    account_name: t.account_name || "",
-    to_account_name: t.to_account_name || "",
-    category_name: t.category_name || "",
-    budget_item_name: t.budget_item_name || "",
+    account_name: t.account_name || account.name || "",
+    to_account_name: t.to_account_name || toAccount.name || "",
+    category_name: t.category_name || category.name || "",
+    budget_item_name: t.budget_item_name || budgetItem.name || "",
     tags: t.tags || "",
     status: t.status || "cleared"
   };
