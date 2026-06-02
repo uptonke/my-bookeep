@@ -1,5 +1,55 @@
-// v59 hotfix：補回總覽需要的預算進度清單 helper。
+// v59 hotfix：補回總覽需要的預算進度清單 helper，並相容舊 Supabase schema。
 // 這個檔案必須在 script.js 前載入。
+
+(function patchSupabaseMissingViews() {
+  if (!window.supabase || window.supabase.__bookeepV59Patched) return;
+  const originalCreateClient = window.supabase.createClient.bind(window.supabase);
+
+  window.supabase.createClient = function patchedCreateClient(...args) {
+    const client = originalCreateClient(...args);
+    const originalFrom = client.from.bind(client);
+
+    client.from = function patchedFrom(tableName) {
+      if (tableName === "v_transaction_details") {
+        return {
+          select: async columns => {
+            const res = await originalFrom("transactions").select(columns || "*");
+            if (res.error) return res;
+            return { data: (res.data || []).map(normalizeTransactionDetail), error: null };
+          }
+        };
+      }
+
+      // 舊 schema 沒有這兩個 view；目前前端主要用 getCurrentYearSummary() 自算，所以給空陣列避免假錯誤。
+      if (tableName === "v_year_summary" || tableName === "v_budget_summary") {
+        return { select: async () => ({ data: [], error: null }) };
+      }
+
+      return originalFrom(tableName);
+    };
+
+    return client;
+  };
+
+  window.supabase.__bookeepV59Patched = true;
+})();
+
+function normalizeTransactionDetail(t) {
+  const date = String(t.transaction_date || "");
+  const year = Number(date.slice(0, 4)) || null;
+  const month = Number(date.slice(5, 7)) || null;
+  return {
+    ...t,
+    tx_year: t.tx_year ?? year,
+    tx_month: t.tx_month ?? month,
+    account_name: t.account_name || "",
+    to_account_name: t.to_account_name || "",
+    category_name: t.category_name || "",
+    budget_item_name: t.budget_item_name || "",
+    tags: t.tags || "",
+    status: t.status || "cleared"
+  };
+}
 
 function renderBudgetProgressList(limit = 8) {
   const rows = getBudgetCompareRows(limit);
