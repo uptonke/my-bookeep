@@ -1,6 +1,7 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v31";
+const APP_VERSION = "v59";
+const RECENT_TRANSACTION_LIMIT = 20;
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -427,119 +428,58 @@ function renderDatabaseStatusCard() {
 }
 
 function optionList(rows, selected, label = "name", value = "id", placeholder = "請選擇") {
-  const opts = [`<option value="">${escapeHtml(placeholder)}</option>`];
-  rows.forEach(row => {
-    const isSelected = String(row[value]) === String(selected) ? "selected" : "";
-    opts.push(`<option value="${escapeHtml(row[value])}" ${isSelected}>${escapeHtml(row[label])}</option>`);
-  });
-  return opts.join("");
+  return `<option value="">${escapeHtml(placeholder)}</option>` + rows.map(row => {
+    const val = row[value];
+    const lab = row[label];
+    return `<option value="${escapeHtml(val)}" ${val === selected ? "selected" : ""}>${escapeHtml(lab)}</option>`;
+  }).join("");
 }
 
-function categoryTypeFor(type = "") {
-  if (type === "refund") return "expense";
-  return type;
+function accountOptions(selected = "", placeholder = "請選擇帳戶") {
+  return optionList(state.data.accounts.filter(a => a.is_active !== false), selected, "name", "id", placeholder);
 }
 
 function categoryOptions(type = "", selected = "") {
-  const mappedType = categoryTypeFor(type);
-  const rows = state.data.categories
-    .filter(c => !mappedType || c.type === mappedType)
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name));
+  const rows = state.data.categories.filter(c => c.is_active !== false && (!type || c.type === type || c.type === "other"));
   return optionList(rows, selected, "name", "id", "未分類");
 }
 
-function expenseTransactionOptions(selected = "") {
-  const rows = transactionsForSelectedYear()
-    .filter(t => t.type === "expense" && t.status !== "cancelled")
-    .sort((a, b) => String(b.transaction_date).localeCompare(String(a.transaction_date)))
-    .slice(0, 120);
-  const opts = [`<option value="">不關聯原支出</option>`];
-  rows.forEach(t => {
-    const label = `${t.transaction_date}｜${fmtMoney(t.amount)}｜${t.merchant || t.category_name || "未命名支出"}`;
-    opts.push(`<option value="${escapeHtml(t.id)}" ${String(t.id) === String(selected) ? "selected" : ""}>${escapeHtml(label)}</option>`);
-  });
-  return opts.join("");
-}
-
-function accountOptions(selected = "") {
-  const rows = state.data.accounts
-    .filter(a => a.is_active !== false)
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name));
-  return optionList(rows, selected, "name", "id", "請選擇帳戶");
-}
-
-function creditCardAccountOptions(selected = "") {
-  const rows = state.data.accounts
-    .filter(a => a.is_active !== false && a.type === "credit_card")
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name));
-  return optionList(rows, selected, "name", "id", "請先在帳戶新增信用卡帳戶");
-}
-
-function budgetItemOptions(selected = "") {
-  const rows = state.data.budgetItems
-    .filter(b => b.year_id === state.selectedYearId && b.is_active !== false)
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name));
-  return optionList(rows, selected, "name", "id", "不綁定預算項目");
-}
-
-function enrichTransaction(row) {
-  const account = state.data.accounts.find(a => a.id === row.account_id) || {};
-  const toAccount = state.data.accounts.find(a => a.id === row.to_account_id) || {};
-  const category = state.data.categories.find(c => c.id === row.category_id) || {};
-  const budgetItem = state.data.budgetItems.find(b => b.id === row.budget_item_id) || {};
-  const date = row.transaction_date || "";
-  return {
-    ...row,
-    tx_year: date ? Number(String(date).slice(0, 4)) : null,
-    tx_month: date ? Number(String(date).slice(5, 7)) : null,
-    account_name: account.name || "",
-    account_type: account.type || "",
-    to_account_name: toAccount.name || "",
-    category_name: category.name || "未分類",
-    category_type: category.type || "",
-    budget_item_name: budgetItem.name || "",
-    tags: row.tags || ""
-  };
-}
-
-function allTransactionsEnriched() {
-  return (state.data.transactions || [])
-    .map(enrichTransaction)
-    .sort((a, b) => String(b.transaction_date || "").localeCompare(String(a.transaction_date || "")) || String(b.created_at || "").localeCompare(String(a.created_at || "")));
-}
-
-function transactionsForSelectedYear() {
-  return allTransactionsEnriched().filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear));
-}
-
-
-function selectedYearFirstTransactionMonth() {
-  const months = transactionsForSelectedYear()
-    .filter(t => t.status !== "cancelled")
-    .map(t => Number(t.tx_month || 0))
-    .filter(m => m >= 1 && m <= 12);
-  return months.length ? Math.min(...months) : null;
-}
-
-function yearBudgetContributionCount(year = {}) {
-  const budgetYear = Number(year.budget_year || state.selectedBudgetYear);
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1;
-
-  if ((year.budget_mode || "annual_total") !== "monthly_contribution") return 1;
-  if (budgetYear > currentYear) return 0;
-
-  const startMonth = selectedYearFirstTransactionMonth() || (budgetYear === currentYear ? currentMonth : 1);
-  const endMonth = budgetYear === currentYear ? currentMonth : 12;
-
-  return Math.max(0, endMonth - startMonth + 1);
+function budgetOptions(selected = "") {
+  const rows = state.data.budgetItems.filter(b => b.is_active !== false && b.year_id === state.selectedYearId);
+  return `<option value="">不綁定預算項目</option>` + rows.map(b => `<option value="${escapeHtml(b.id)}" ${b.id === selected ? "selected" : ""}>${escapeHtml(b.name)}</option>`).join("");
 }
 
 function yearBudgetModeLabel(summary) {
   return `全局提撥 ${summary.contribution_count || 0} 筆｜提撥累積 ${fmtMoney(summary.current_period_budget || 0)}`;
 }
 
+function getRecordStartMonthForYear(year) {
+  const months = state.data.transactionView
+    .filter(t => Number(t.tx_year) === Number(year) && t.status !== "cancelled")
+    .map(t => Number(t.tx_month))
+    .filter(Boolean);
+  if (!months.length) return 1;
+  return Math.min(...months);
+}
+
+function getBudgetContributionCountActualForYear(yearRecord = {}) {
+  const year = Number(yearRecord.budget_year || state.selectedBudgetYear);
+  const rows = (state.data.budgetContributions || []).filter(c => contributionYear(c.contribution_date) === year);
+  if (rows.length) {
+    const months = new Set(rows.map(c => String(c.contribution_date || "").slice(0, 7)).filter(Boolean));
+    return months.size || rows.length;
+  }
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const startMode = yearRecord.budget_start_mode || "record_start";
+  const startMonth = startMode === "calendar_year" ? 1 : getRecordStartMonthForYear(year);
+
+  if (year < currentYear) return 12 - startMonth + 1;
+  if (year > currentYear) return 0;
+  return Math.max(0, currentMonth - startMonth + 1);
+}
 
 function selectedYearRecord() {
   return state.data.years.find(y => y.id === state.selectedYearId)
@@ -667,456 +607,297 @@ function getCurrentYearSummary() {
 }
 
 function budgetIsAnnualRolloverMode(item) {
-  return item?.period_type === "annual" && item?.rollover_mode === "carryover";
+  return String(item?.period_type || "annual") === "annual" && String(item?.rollover_mode || "none") === "carryover";
 }
 
-function budgetIsContributionMode(item) {
-  return item?.rollover_mode === "carryover" && ["monthly", "weekly", "custom"].includes(item?.period_type);
-}
-
-function budgetModeKind(item) {
-  if (budgetIsAnnualRolloverMode(item)) return "annual_rollover";
-  if (budgetIsContributionMode(item)) return "contribution";
-  return "fixed";
-}
-
-function budgetModeName(item) {
-  const kind = budgetModeKind(item);
-  if (kind === "annual_rollover") return "年度結轉型";
-  if (kind === "contribution") return "提撥型";
-  return "固定型";
-}
-
-function budgetContributionEligible(item) {
-  return budgetIsContributionMode(item) || budgetIsAnnualRolloverMode(item);
-}
-
-function budgetContributionCount(item) {
-  const year = Number(state.selectedBudgetYear);
-  const now = new Date();
-  const currentYear = now.getFullYear();
-
-  if (!budgetIsContributionMode(item)) return 1;
-  if (year > currentYear) return 0;
-
-  const period = item.period_type || "monthly";
-  const startDate = item.start_date ? new Date(`${item.start_date}T00:00:00`) : new Date(year, 0, 1);
-  const endDate = year === currentYear ? now : new Date(year, 11, 31);
-
-  if (endDate < startDate) return 0;
-
-  if (period === "monthly") {
-    return Math.max(1, (endDate.getFullYear() - startDate.getFullYear()) * 12 + (endDate.getMonth() - startDate.getMonth()) + 1);
+function budgetItemNoteRowsFromNote(note = "") {
+  const match = String(note || "").match(/\[budget_item_notes:([^\]]*)\]/);
+  if (!match) return [];
+  try {
+    const rows = JSON.parse(decodeURIComponent(match[1]));
+    return Array.isArray(rows) ? rows : [];
+  } catch (error) {
+    console.warn("budget item notes parse failed", error);
+    return [];
   }
-
-  if (period === "weekly") {
-    const diffDays = Math.floor((endDate - startDate) / 86400000) + 1;
-    return Math.max(1, Math.ceil(diffDays / 7));
-  }
-
-  return 1;
 }
 
-
-function contributionYear(dateValue) {
-  return dateValue ? Number(String(dateValue).slice(0, 4)) : null;
+function stripBudgetItemNotesMarker(note = "") {
+  return String(note || "").replace(/\s*\[budget_item_notes:[^\]]*\]\s*/g, "").trim();
 }
 
-function isBudgetClosureContribution(c) {
-  return String(c?.note || "").startsWith("[CLOSE]");
+function applyBudgetItemNotesMarker(note = "", rows = []) {
+  const cleaned = stripBudgetItemNotesMarker(note);
+  if (!rows.length) return cleaned;
+  const marker = `[budget_item_notes:${encodeURIComponent(JSON.stringify(rows))}]`;
+  return `${cleaned}${cleaned ? "\n" : ""}${marker}`;
 }
 
-function contributionsForBudgetItem(itemId) {
-  return (state.data.budgetContributions || [])
-    .filter(c => c.budget_item_id === itemId)
-    .filter(c => contributionYear(c.contribution_date) === Number(state.selectedBudgetYear))
-    .filter(c => !isBudgetClosureContribution(c));
+function budgetItemHistoryRows(item) {
+  const notes = budgetItemNoteRowsFromNote(item?.note || "");
+  const contributions = (state.data.budgetContributions || [])
+    .filter(c => c.budget_item_id === item.id)
+    .map(c => ({
+      date: c.contribution_date,
+      type: "提撥",
+      amount: Number(c.amount || 0),
+      note: c.note || ""
+    }));
+  const txRows = transactionsForSelectedYear()
+    .filter(t => t.budget_item_id === item.id && t.status !== "cancelled" && ["expense", "refund"].includes(t.type))
+    .map(t => ({
+      date: t.transaction_date,
+      type: t.type === "refund" ? "退款" : "支出",
+      amount: t.type === "refund" ? Number(t.amount || 0) : -Number(t.amount || 0),
+      note: t.merchant || t.note || t.category_name || ""
+    }));
+  const movementRows = (state.data.budgetMovements || [])
+    .filter(m => m.from_budget_item_id === item.id || m.to_budget_item_id === item.id)
+    .map(m => ({
+      date: m.movement_date,
+      type: m.to_budget_item_id === item.id ? "移入" : "移出",
+      amount: m.to_budget_item_id === item.id ? Number(m.amount || 0) : -Number(m.amount || 0),
+      note: m.note || ""
+    }));
+  return [...notes, ...contributions, ...txRows, ...movementRows]
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
 }
 
-function budgetClosureEventsForBudgetItem(itemId) {
-  return (state.data.budgetContributions || [])
-    .filter(c => c.budget_item_id === itemId)
-    .filter(c => contributionYear(c.contribution_date) === Number(state.selectedBudgetYear))
-    .filter(c => isBudgetClosureContribution(c))
-    .sort((a, b) => String(a.contribution_date || "").localeCompare(String(b.contribution_date || "")) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
+async function closeBudgetItemCycle(itemId) {
+  const item = state.data.budgetItems.find(x => x.id === itemId);
+  if (!item) throw new Error("找不到預算項目。");
+  const summary = budgetItemSummary(item);
+  const cycleRows = budgetItemHistoryRows(item);
+  const closeDate = today();
+  const noteRow = {
+    date: closeDate,
+    type: "結帳",
+    amount: Number(summary.remaining_amount || 0),
+    note: `結帳前：可用 ${Math.round(Number(summary.current_budget_amount || 0))}、實際 ${Math.round(Number(summary.actual_amount || 0))}、剩餘 ${Math.round(Number(summary.remaining_amount || 0))}`
+  };
+  const existingNoteRows = budgetItemNoteRowsFromNote(item.note || "");
+  const nextNoteRows = [...existingNoteRows, noteRow];
+
+  const payload = {
+    ...item,
+    planned_amount: Math.max(0, Number(summary.remaining_amount || 0)),
+    start_date: closeDate,
+    note: applyBudgetItemNotesMarker(stripBudgetItemNotesMarker(item.note || ""), nextNoteRows)
+  };
+  return await upsert("budget_items", payload, { expect: { id: item.id } });
 }
 
-function latestBudgetClosure(itemId) {
-  const rows = budgetClosureEventsForBudgetItem(itemId);
-  return rows.length ? rows[rows.length - 1] : null;
-}
-
-function isAfterBudgetClosure(dateValue, closure) {
-  if (!closure) return true;
-  if (!dateValue) return false;
-  return String(dateValue) > String(closure.contribution_date || "");
-}
-
-function budgetClosureCarryAmount(closure) {
-  return closure ? Number(closure.amount || 0) : 0;
-}
-
-function budgetContributionTotal(itemId) {
-  return contributionsForBudgetItem(itemId).reduce((sum, c) => sum + Number(c.amount || 0), 0);
-}
-
-function budgetContributionCountActual(itemId) {
-  return contributionsForBudgetItem(itemId).length;
-}
-
-function budgetCurrentAvailableAmount(item) {
-  const movementNet = budgetMovementNet(item.id || item.budget_item_id);
-  if (budgetIsContributionMode(item)) return budgetContributionTotal(item.id || item.budget_item_id) + movementNet;
-  return Number(item?.planned_amount || 0) + movementNet;
-}
-
-function budgetFundingLabel(item) {
-  const itemId = item.id || item.budget_item_id;
-  if (budgetIsAnnualRolloverMode(item)) {
-    return `年度新增 ${fmtMoney(item?.planned_amount || 0)} + 結轉/提撥 ${fmtMoney(budgetContributionTotal(itemId))}`;
-  }
-  if (budgetIsContributionMode(item)) {
-    return `實際提撥 ${budgetContributionCountActual(itemId)} 筆，累積 ${fmtMoney(budgetContributionTotal(itemId))}`;
-  }
-  if (item?.period_type && item.period_type !== "annual") {
-    return `${labelOf(item.period_type)} ${fmtMoney(item.planned_amount)}`;
-  }
-  return `固定預算 ${fmtMoney(item?.planned_amount || 0)}`;
-}
-
-function budgetAvailableLabel(item) {
-  if (budgetIsAnnualRolloverMode(item)) return `年度可用 ${fmtMoney(item.current_budget_amount || 0)}`;
-  if (budgetIsContributionMode(item)) return `累積提撥 ${fmtMoney(item.current_budget_amount || 0)}`;
-  return `預算 ${fmtMoney(item.current_budget_amount || item.planned_amount || 0)}`;
-}
-
-
-function movementsForBudgetItem(itemId) {
-  return (state.data.budgetMovements || [])
-    .filter(m => contributionYear(m.movement_date) === Number(state.selectedBudgetYear))
-    .filter(m => m.from_budget_item_id === itemId || m.to_budget_item_id === itemId);
-}
-
-function budgetMovementInTotal(itemId) {
-  return movementsForBudgetItem(itemId)
-    .filter(m => m.to_budget_item_id === itemId)
-    .reduce((sum, m) => sum + Number(m.amount || 0), 0);
-}
-
-function budgetMovementOutTotal(itemId) {
-  return movementsForBudgetItem(itemId)
-    .filter(m => m.from_budget_item_id === itemId)
-    .reduce((sum, m) => sum + Number(m.amount || 0), 0);
-}
-
-function budgetMovementNet(itemId) {
-  return budgetMovementInTotal(itemId) - budgetMovementOutTotal(itemId);
-}
-
-
-function currentBudgetMonth() {
-  const now = new Date();
-  const selectedYear = Number(state.selectedBudgetYear);
-  if (selectedYear === now.getFullYear()) return now.getMonth() + 1;
-
-  const txMonths = transactionsForSelectedYear()
-    .filter(t => t.status !== "cancelled")
-    .map(t => Number(t.tx_month || 0))
-    .filter(m => m >= 1 && m <= 12);
-
-  const contributionMonths = (state.data.budgetContributions || [])
-    .filter(c => contributionYear(c.contribution_date) === selectedYear)
-    .map(c => Number(String(c.contribution_date || "").slice(5, 7)))
-    .filter(m => m >= 1 && m <= 12);
-
-  const movementMonths = (state.data.budgetMovements || [])
-    .filter(m => contributionYear(m.movement_date) === selectedYear)
-    .map(m => Number(String(m.movement_date || "").slice(5, 7)))
-    .filter(m => m >= 1 && m <= 12);
-
-  const months = [...txMonths, ...contributionMonths, ...movementMonths];
-  return months.length ? Math.max(...months) : 12;
-}
-
-function isCurrentBudgetMonth(dateValue) {
-  if (!dateValue) return false;
-  return contributionYear(dateValue) === Number(state.selectedBudgetYear)
-    && Number(String(dateValue).slice(5, 7)) === currentBudgetMonth();
-}
-
-function txRowsForBudgetItem(itemId) {
+function actualForBudgetItem(item) {
+  const start = item.start_date || `${state.selectedBudgetYear}-01-01`;
+  const end = item.end_date || `${state.selectedBudgetYear}-12-31`;
   return transactionsForSelectedYear()
     .filter(t => t.status !== "cancelled")
-    .filter(t => t.budget_item_id === itemId);
+    .filter(t => t.budget_item_id === item.id)
+    .filter(t => !start || t.transaction_date >= start)
+    .filter(t => !end || t.transaction_date <= end)
+    .reduce((sum, t) => {
+      if (t.type === "expense") return sum + Number(t.amount || 0);
+      if (t.type === "refund") return sum - Number(t.amount || 0);
+      return sum;
+    }, 0);
 }
 
-function actualForBudgetItem(item, scope = "year", closure = null) {
-  return txRowsForBudgetItem(item.id || item.budget_item_id).reduce((sum, t) => {
-    if (scope === "month" && Number(t.tx_month || 0) !== currentBudgetMonth()) return sum;
-    if (scope === "cycle" && !isAfterBudgetClosure(t.transaction_date, closure)) return sum;
-    if (item.item_type === "expense" && t.type === "refund") return sum - Number(t.amount || 0);
-    if (t.type === item.item_type) return sum + Number(t.amount || 0);
-    return sum;
-  }, 0);
+function contributionYear(date) {
+  return Number(String(date || "").slice(0, 4));
 }
 
-function contributionsForBudgetItemInScope(itemId, scope = "year", closure = null) {
-  return contributionsForBudgetItem(itemId)
-    .filter(c => scope !== "month" || isCurrentBudgetMonth(c.contribution_date))
-    .filter(c => scope !== "cycle" || isAfterBudgetClosure(c.contribution_date, closure));
+function contributionMonthIndex(date) {
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.getFullYear() * 12 + d.getMonth();
 }
 
-function budgetContributionTotalInScope(itemId, scope = "year", closure = null) {
-  return contributionsForBudgetItemInScope(itemId, scope, closure).reduce((sum, c) => sum + Number(c.amount || 0), 0);
-}
+function contributionCountForItem(item) {
+  const period = item.period_type || "annual";
+  const rows = (state.data.budgetContributions || []).filter(c => c.budget_item_id === item.id);
+  if (rows.length) return rows.length;
+  if (!["monthly", "weekly"].includes(period) || item.rollover_mode !== "carryover") return 1;
 
-function budgetContributionCountInScope(itemId, scope = "year", closure = null) {
-  return contributionsForBudgetItemInScope(itemId, scope, closure).length;
-}
+  const now = new Date();
+  const currentYear = Number(state.selectedBudgetYear);
+  const startDate = item.start_date || `${currentYear}-01-01`;
+  const endDate = item.end_date || today();
+  const start = new Date(`${startDate}T00:00:00`);
+  const endRaw = new Date(`${endDate}T00:00:00`);
+  const end = now.getFullYear() === currentYear ? new Date(Math.min(now.getTime(), endRaw.getTime())) : endRaw;
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 0;
 
-function movementsForBudgetItemInScope(itemId, scope = "year", closure = null) {
-  return movementsForBudgetItem(itemId)
-    .filter(m => scope !== "month" || isCurrentBudgetMonth(m.movement_date))
-    .filter(m => scope !== "cycle" || isAfterBudgetClosure(m.movement_date, closure));
-}
-
-function budgetMovementInTotalInScope(itemId, scope = "year", closure = null) {
-  return movementsForBudgetItemInScope(itemId, scope, closure)
-    .filter(m => m.to_budget_item_id === itemId)
-    .reduce((sum, m) => sum + Number(m.amount || 0), 0);
-}
-
-function budgetMovementOutTotalInScope(itemId, scope = "year", closure = null) {
-  return movementsForBudgetItemInScope(itemId, scope, closure)
-    .filter(m => m.from_budget_item_id === itemId)
-    .reduce((sum, m) => sum + Number(m.amount || 0), 0);
-}
-
-function budgetMovementNetInScope(itemId, scope = "year", closure = null) {
-  return budgetMovementInTotalInScope(itemId, scope, closure) - budgetMovementOutTotalInScope(itemId, scope, closure);
-}
-
-function budgetAvailableForScope(item, scope = "year", closure = null) {
-  const itemId = item.id || item.budget_item_id;
-  const movementNet = budgetMovementNetInScope(itemId, scope, closure);
-
-  if (scope === "cycle") {
-    return budgetClosureCarryAmount(closure) + budgetContributionTotalInScope(itemId, scope, closure) + movementNet;
+  if (period === "weekly") {
+    return Math.floor((end - start) / (7 * 86400000)) + 1;
   }
-
-  if (budgetIsAnnualRolloverMode(item)) {
-    // 年度結轉型：今年新增預算 + 今年收到的前期結轉/加碼提撥 + 預算移轉 - 今年實際。
-    // 實際花費由 selectedBudgetYear 控制，跨年後自然歸 0。
-    return Number(item.planned_amount || 0) + budgetContributionTotalInScope(itemId, scope) + movementNet;
-  }
-
-  if (budgetIsContributionMode(item)) {
-    return budgetContributionTotalInScope(itemId, scope) + movementNet;
-  }
-
-  if (scope === "month" && item.period_type === "monthly") {
-    return Number(item.planned_amount || 0) + movementNet;
-  }
-
-  return Number(item.planned_amount || 0) + movementNet;
+  return (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
 }
 
-function budgetPrimaryScope(item, closure = null) {
-  if (closure) return "cycle";
-  return item?.period_type === "monthly" ? "month" : "year";
+function contributionAmountForItem(item) {
+  const rows = (state.data.budgetContributions || []).filter(c => c.budget_item_id === item.id);
+  if (rows.length) return rows.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+  if (["monthly", "weekly"].includes(item.period_type || "annual") && item.rollover_mode === "carryover") {
+    return Number(item.planned_amount || 0) * contributionCountForItem(item);
+  }
+  return Number(item.planned_amount || 0);
 }
 
-function budgetScopeLabel(scope) {
-  if (scope === "month") return `${currentBudgetMonth()}月`;
-  if (scope === "cycle") return "本週期";
-  return "年度累積";
+function movementNetForItem(itemId) {
+  return (state.data.budgetMovements || [])
+    .filter(m => contributionYear(m.movement_date) === Number(state.selectedBudgetYear))
+    .reduce((sum, m) => {
+      if (m.to_budget_item_id === itemId) return sum + Number(m.amount || 0);
+      if (m.from_budget_item_id === itemId) return sum - Number(m.amount || 0);
+      return sum;
+    }, 0);
+}
+
+function budgetItemSummary(item) {
+  const actual_amount = actualForBudgetItem(item);
+  const current_budget_amount = contributionAmountForItem(item) + movementNetForItem(item.id);
+  const remaining_amount = current_budget_amount - actual_amount;
+  return {
+    ...item,
+    category_name: state.data.categories.find(c => c.id === item.category_id)?.name || "",
+    actual_amount,
+    current_budget_amount,
+    remaining_amount,
+    usage_pct: current_budget_amount ? Math.round(actual_amount / current_budget_amount * 10000) / 100 : 0,
+    budget_formula: ["monthly", "weekly"].includes(item.period_type || "annual") && item.rollover_mode === "carryover"
+      ? `實際提撥 ${contributionCountForItem(item)} 筆，累積 ${fmtMoney(current_budget_amount)}`
+      : budgetIsAnnualRolloverMode(item)
+        ? `年度結轉型：目前可用 ${fmtMoney(current_budget_amount)}`
+        : `固定預算 ${fmtMoney(item.planned_amount)}`
+  };
 }
 
 function budgetItemSummariesForSelectedYear() {
-  return (state.data.budgetItems || [])
-    .filter(i => i.year_id === state.selectedYearId)
-    .map(i => {
-      const category = state.data.categories.find(c => c.id === i.category_id) || {};
-      const planned_amount = Number(i.planned_amount || 0);
-      const is_contribution_mode = budgetIsContributionMode(i);
-      const is_annual_rollover_mode = budgetIsAnnualRolloverMode(i);
-      const mode_kind = budgetModeKind(i);
-      const latest_closure = latestBudgetClosure(i.id);
-      const primary_scope = budgetPrimaryScope(i, latest_closure);
-
-      const year_contribution_count = budgetContributionEligible(i) ? budgetContributionCountInScope(i.id, "year") : budgetContributionCount(i);
-      const month_contribution_count = budgetContributionEligible(i) ? budgetContributionCountInScope(i.id, "month") : 0;
-      const year_contribution_total = budgetContributionEligible(i) ? budgetContributionTotalInScope(i.id, "year") : 0;
-      const month_contribution_total = budgetContributionEligible(i) ? budgetContributionTotalInScope(i.id, "month") : 0;
-
-      const year_movement_in = budgetMovementInTotalInScope(i.id, "year");
-      const year_movement_out = budgetMovementOutTotalInScope(i.id, "year");
-      const year_movement_net = year_movement_in - year_movement_out;
-      const month_movement_in = budgetMovementInTotalInScope(i.id, "month");
-      const month_movement_out = budgetMovementOutTotalInScope(i.id, "month");
-      const month_movement_net = month_movement_in - month_movement_out;
-
-      const cycle_contribution_count = latest_closure ? budgetContributionCountInScope(i.id, "cycle", latest_closure) : 0;
-      const cycle_contribution_total = latest_closure ? budgetContributionTotalInScope(i.id, "cycle", latest_closure) : 0;
-      const cycle_movement_in = latest_closure ? budgetMovementInTotalInScope(i.id, "cycle", latest_closure) : 0;
-      const cycle_movement_out = latest_closure ? budgetMovementOutTotalInScope(i.id, "cycle", latest_closure) : 0;
-      const cycle_movement_net = cycle_movement_in - cycle_movement_out;
-
-      const year_budget_amount = budgetAvailableForScope(i, "year");
-      const month_budget_amount = budgetAvailableForScope(i, "month");
-      const cycle_budget_amount = latest_closure ? budgetAvailableForScope(i, "cycle", latest_closure) : 0;
-      const year_actual_amount = actualForBudgetItem(i, "year");
-      const month_actual_amount = actualForBudgetItem(i, "month");
-      const cycle_actual_amount = latest_closure ? actualForBudgetItem(i, "cycle", latest_closure) : 0;
-      const year_remaining_amount = year_budget_amount - year_actual_amount;
-      const month_remaining_amount = month_budget_amount - month_actual_amount;
-      const cycle_remaining_amount = cycle_budget_amount - cycle_actual_amount;
-
-      const current_budget_amount = primary_scope === "cycle" ? cycle_budget_amount : primary_scope === "month" ? month_budget_amount : year_budget_amount;
-      const actual_amount = primary_scope === "cycle" ? cycle_actual_amount : primary_scope === "month" ? month_actual_amount : year_actual_amount;
-      const remaining_amount = current_budget_amount - actual_amount;
-
-      return {
-        ...i,
-        budget_item_id: i.id,
-        budget_year: state.selectedBudgetYear,
-        category_name: category.name || "",
-        category_type: category.type || "",
-        planned_amount,
-        primary_scope,
-        scope_label: budgetScopeLabel(primary_scope),
-        current_month: currentBudgetMonth(),
-
-        contribution_count: primary_scope === "cycle" ? cycle_contribution_count : primary_scope === "month" ? month_contribution_count : year_contribution_count,
-        contribution_total: primary_scope === "cycle" ? cycle_contribution_total : primary_scope === "month" ? month_contribution_total : year_contribution_total,
-        year_contribution_count,
-        month_contribution_count,
-        cycle_contribution_count,
-        year_contribution_total,
-        month_contribution_total,
-        cycle_contribution_total,
-        latest_closure,
-        closure_carry_amount: budgetClosureCarryAmount(latest_closure),
-
-        movement_in: primary_scope === "cycle" ? cycle_movement_in : primary_scope === "month" ? month_movement_in : year_movement_in,
-        movement_out: primary_scope === "cycle" ? cycle_movement_out : primary_scope === "month" ? month_movement_out : year_movement_out,
-        movement_net: primary_scope === "cycle" ? cycle_movement_net : primary_scope === "month" ? month_movement_net : year_movement_net,
-        year_movement_in,
-        year_movement_out,
-        year_movement_net,
-        month_movement_in,
-        month_movement_out,
-        month_movement_net,
-        cycle_movement_in,
-        cycle_movement_out,
-        cycle_movement_net,
-
-        is_contribution_mode,
-        is_annual_rollover_mode,
-        mode_kind,
-        mode_name: budgetModeName(i),
-        current_budget_amount,
-        actual_amount,
-        remaining_amount,
-        used_pct: current_budget_amount ? Math.round(actual_amount / current_budget_amount * 10000) / 100 : 0,
-
-        month_budget_amount,
-        month_actual_amount,
-        month_remaining_amount,
-        month_used_pct: month_budget_amount ? Math.round(month_actual_amount / month_budget_amount * 10000) / 100 : 0,
-
-        cycle_budget_amount,
-        cycle_actual_amount,
-        cycle_remaining_amount,
-        cycle_used_pct: cycle_budget_amount ? Math.round(cycle_actual_amount / cycle_budget_amount * 10000) / 100 : 0,
-
-        year_budget_amount,
-        year_actual_amount,
-        year_remaining_amount,
-        year_used_pct: year_budget_amount ? Math.round(year_actual_amount / year_budget_amount * 10000) / 100 : 0,
-
-        funding_label: budgetFundingLabel({ ...i, planned_amount }),
-        available_label: primary_scope === "month"
-          ? `${currentBudgetMonth()}月可用 ${fmtMoney(month_budget_amount)}`
-          : budgetAvailableLabel({ ...i, planned_amount, current_budget_amount: year_budget_amount })
-      };
-    })
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name)));
+  return state.data.budgetItems
+    .filter(item => item.year_id === state.selectedYearId && item.is_active !== false)
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+    .map(budgetItemSummary);
 }
 
-function typeBadge(type) {
-  return `<span class="badge ${escapeHtml(type)}">${escapeHtml(labelOf(type))}</span>`;
+function transactionsForSelectedYear() {
+  return state.data.transactionView
+    .filter(t => Number(t.tx_year) === Number(state.selectedBudgetYear))
+    .sort((a, b) => String(b.transaction_date).localeCompare(String(a.transaction_date)) || String(b.created_at || "").localeCompare(String(a.created_at || "")));
 }
 
-async function queryTable(name, options = {}) {
-  let query = state.client.from(name).select(options.select || "*");
-  if (options.order) query = query.order(options.order.column, { ascending: options.order.ascending ?? true });
-  const { data, error } = await query;
-  if (error) throw new Error(`${name}: ${error.message}`);
+function allTransactionsEnriched() {
+  return [...state.data.transactionView]
+    .sort((a, b) => String(a.transaction_date).localeCompare(String(b.transaction_date)) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
+}
+
+async function loadTable(table, columns = "*") {
+  const { data, error } = await state.client.from(table).select(columns);
+  if (error) {
+    throw new Error(`${tableLabel(table)}讀取失敗：${formatSupabaseError(error)}`);
+  }
   return data || [];
 }
 
+async function loadTableSafe(table, columns = "*") {
+  try {
+    return await loadTable(table, columns);
+  } catch (error) {
+    state.loadErrors.push(error.message);
+    console.warn(error.message);
+    return [];
+  }
+}
+
 async function loadRecurringOnly() {
-  const rows = await queryTable("recurring_transactions", { order: { column: "next_due_date", ascending: true } });
-  state.data.recurring = rows;
-  return rows;
+  const rows = await loadTableSafe("recurring_transactions");
+  state.data.recurring = rows.sort((a, b) => String(a.next_due_date || "").localeCompare(String(b.next_due_date || "")));
+  return state.data.recurring;
 }
 
 async function loadAll() {
   state.loading = true;
   state.loadErrors = [];
-  showAlert("");
-
-  const requests = {
-    years: queryTable("years", { order: { column: "budget_year", ascending: true } }),
-    accounts: queryTable("accounts", { order: { column: "sort_order", ascending: true } }),
-    categories: queryTable("categories", { order: { column: "sort_order", ascending: true } }),
-    tags: queryTable("tags", { order: { column: "name", ascending: true } }),
-    budgetItems: queryTable("budget_items", { order: { column: "sort_order", ascending: true } }),
-    budgetContributions: queryTable("budget_contributions", { order: { column: "contribution_date", ascending: false } }),
-    budgetMovements: queryTable("budget_movements", { order: { column: "movement_date", ascending: false } }),
-    transactionEntries: queryTable("transaction_entries", { order: { column: "entry_date", ascending: false } }),
-    transactionSplits: queryTable("transaction_splits", { order: { column: "created_at", ascending: true } }),
-    transactions: queryTable("transactions", { order: { column: "transaction_date", ascending: false } }),
-    transactionView: queryTable("v_transactions_full", { order: { column: "transaction_date", ascending: false } }),
-    accountBalances: queryTable("v_account_balances", { order: { column: "sort_order", ascending: true } }),
-    yearSummary: queryTable("v_year_budget_summary", { order: { column: "budget_year", ascending: true } }),
-    budgetSummary: queryTable("v_budget_item_summary", { order: { column: "name", ascending: true } }),
-    categorySpending: queryTable("v_category_spending"),
-    monthlyCashflow: queryTable("v_monthly_cashflow"),
-    recurring: queryTable("recurring_transactions", { order: { column: "next_due_date", ascending: true } }),
-    quickTemplates: queryTable("quick_templates", { order: { column: "sort_order", ascending: true } }),
-    creditCards: queryTable("credit_cards", { order: { column: "card_name", ascending: true } }),
-    creditStatements: queryTable("credit_card_statements", { order: { column: "due_date", ascending: false } }),
-    loans: queryTable("loans", { order: { column: "created_at", ascending: false } }),
-    goals: queryTable("goals", { order: { column: "priority", ascending: true } })
-  };
-
   try {
-    const entries = Object.entries(requests);
-    const results = await Promise.allSettled(entries.map(async ([key, promise]) => [key, await promise]));
-    const nextData = {};
-    const errors = [];
+    const [
+      years,
+      accounts,
+      categories,
+      tags,
+      budgetItems,
+      budgetContributions,
+      budgetMovements,
+      transactions,
+      transactionView,
+      accountBalances,
+      yearSummary,
+      budgetSummary,
+      categorySpending,
+      monthlyCashflow,
+      recurring,
+      quickTemplates,
+      creditCards,
+      loans,
+      goals,
+      transactionEntries,
+      transactionSplits
+    ] = await Promise.all([
+      loadTableSafe("years"),
+      loadTableSafe("accounts"),
+      loadTableSafe("categories"),
+      loadTableSafe("tags"),
+      loadTableSafe("budget_items"),
+      loadTableSafe("budget_contributions"),
+      loadTableSafe("budget_movements"),
+      loadTableSafe("transactions"),
+      loadTableSafe("v_transaction_details"),
+      loadTableSafe("v_account_balances"),
+      loadTableSafe("v_year_summary"),
+      loadTableSafe("v_budget_summary"),
+      loadTableSafe("v_category_spending"),
+      loadTableSafe("v_monthly_cashflow"),
+      loadTableSafe("recurring_transactions"),
+      loadTableSafe("quick_templates"),
+      loadTableSafe("credit_cards"),
+      loadTableSafe("loans"),
+      loadTableSafe("goals"),
+      loadTableSafe("transaction_entries"),
+      loadTableSafe("transaction_splits")
+    ]);
 
-    results.forEach((result, index) => {
-      const key = entries[index][0];
-      if (result.status === "fulfilled") {
-        const [resolvedKey, value] = result.value;
-        nextData[resolvedKey] = value;
-      } else {
-        errors.push(`${key}: ${result.reason?.message || result.reason}`);
-      }
-    });
+    state.data.years = years.sort((a, b) => Number(a.budget_year) - Number(b.budget_year));
+    state.data.accounts = accounts.sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    state.data.categories = categories.sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    state.data.tags = tags.sort((a, b) => a.name.localeCompare(b.name));
+    state.data.budgetItems = budgetItems;
+    state.data.budgetContributions = budgetContributions;
+    state.data.budgetMovements = budgetMovements;
+    state.data.transactions = transactions;
+    state.data.transactionView = transactionView;
+    state.data.accountBalances = accountBalances;
+    state.data.yearSummary = yearSummary;
+    state.data.budgetSummary = budgetSummary;
+    state.data.categorySpending = categorySpending;
+    state.data.monthlyCashflow = monthlyCashflow;
+    state.data.recurring = recurring.sort((a, b) => String(a.next_due_date || "").localeCompare(String(b.next_due_date || "")));
+    state.data.quickTemplates = quickTemplates.sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    state.data.creditCards = creditCards;
+    state.data.loans = loans;
+    state.data.goals = goals;
+    state.data.transactionEntries = transactionEntries;
+    state.data.transactionSplits = transactionSplits;
 
-    Object.assign(state.data, nextData);
-    state.loadErrors = errors;
-
-    if (!state.selectedYearId && state.data.years.length) {
-      const current = state.data.years.find(y => Number(y.budget_year) === new Date().getFullYear()) || state.data.years[state.data.years.length - 1];
-      state.selectedYearId = current.id;
-      state.selectedBudgetYear = current.budget_year;
+    if (!state.data.years.length) {
+      const currentYear = new Date().getFullYear();
+      await upsert("years", { budget_year: currentYear, name: `${currentYear} 年度預算`, annual_budget: 0 }, { expect: { budget_year: currentYear } });
+      return await loadAll();
     }
 
+    const existing = state.selectedYearId && state.data.years.find(y => y.id === state.selectedYearId);
+    const byCurrentYear = state.data.years.find(y => Number(y.budget_year) === new Date().getFullYear());
+    const selected = existing || byCurrentYear || state.data.years[state.data.years.length - 1];
+    state.selectedYearId = selected.id;
+    state.selectedBudgetYear = selected.budget_year;
+
+    const errors = state.loadErrors;
     if (errors.length) {
       console.warn("部分資料讀取失敗", errors);
       markReadStatus(false, errors.slice(0, 3).join("；"));
@@ -1275,7 +1056,7 @@ function renderOverview() {
       <div class="card chart-card">
         <div class="card-title-row"><h3>預算使用圖</h3><span class="badge">圓環圖</span></div>
         <div class="chart-canvas-wrap tall"><canvas id="overviewBudgetChart"></canvas></div>
-        <p class="chart-note">這張固定看年度提撥合計，不受「本月 / 分類」篩選影響。</p>
+        <p class="chart-note">這張固定看年度總預算，不受「本月 / 分類」篩選影響。</p>
       </div>
       <div class="card chart-card">
         <div class="card-title-row"><h3>分類淨支出排行</h3><span class="badge">長條圖</span></div>
@@ -1367,268 +1148,185 @@ const fallbackQuickTemplates = [
   { key: "builtin-breakfast", name: "早餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "早餐", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
   { key: "builtin-lunch", name: "午餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "午餐", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
   { key: "builtin-dinner", name: "晚餐", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "晚餐", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
-  { key: "builtin-coffee", name: "咖啡", type: "expense", categoryNames: ["日常餐飲", "餐飲"], budgetNames: ["日常餐飲", "餐飲"], merchant: "咖啡", cashflow_nature: "variable", necessity_level: "luxury", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
-  { key: "builtin-transport", name: "交通", type: "expense", categoryNames: ["交通"], budgetNames: ["交通"], merchant: "交通", cashflow_nature: "variable", necessity_level: "survival", accountTypes: ["e_wallet", "credit_card", "cash"], is_builtin: true },
-  { key: "builtin-movie", name: "電影", type: "expense", categoryNames: ["娛樂"], budgetNames: ["電影", "娛樂"], merchant: "電影", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "cash"], is_builtin: true },
-  { key: "builtin-liveMusic", name: "Live Music", type: "expense", categoryNames: ["娛樂"], budgetNames: ["Live Music", "娛樂"], merchant: "Live Music", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "cash"], is_builtin: true },
-  { key: "builtin-comedy", name: "單口喜劇", type: "expense", categoryNames: ["娛樂"], budgetNames: ["單口喜劇", "娛樂"], merchant: "單口喜劇", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "cash"], is_builtin: true },
-  { key: "builtin-subscription", name: "訂閱", type: "expense", categoryNames: ["訂閱"], budgetNames: ["訂閱"], merchant: "訂閱", cashflow_nature: "fixed", necessity_level: "quality", accountTypes: ["credit_card", "bank"], is_builtin: true }
+  { key: "builtin-coffee", name: "咖啡", type: "expense", categoryNames: ["咖啡", "飲料", "日常餐飲"], budgetNames: ["日常花費", "日常餐飲"], merchant: "咖啡", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
+  { key: "builtin-transport", name: "交通", type: "expense", categoryNames: ["交通"], budgetNames: ["日常花費", "交通"], merchant: "交通", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "e_wallet", "cash"], is_builtin: true },
+  { key: "builtin-parking", name: "停車費", type: "expense", categoryNames: ["交通", "停車"], budgetNames: ["日常花費", "交通"], merchant: "停車場", cashflow_nature: "variable", necessity_level: "quality", accountTypes: ["credit_card", "cash", "e_wallet"], is_builtin: true },
+  { key: "builtin-subscription", name: "訂閱", type: "expense", categoryNames: ["訂閱", "娛樂"], budgetNames: ["娛樂", "日常花費"], merchant: "訂閱", cashflow_nature: "fixed", necessity_level: "quality", accountTypes: ["credit_card", "bank"], is_builtin: true },
+  { key: "builtin-openai", name: "OpenAI", type: "expense", categoryNames: ["訂閱", "自我投資"], budgetNames: ["日常花費", "自我投資"], merchant: "OpenAI", cashflow_nature: "fixed", necessity_level: "investment", accountTypes: ["credit_card"], is_builtin: true },
+  { key: "builtin-live-music", name: "Live Music", type: "expense", categoryNames: ["Live Music", "娛樂"], budgetNames: ["Live Music", "娛樂"], merchant: "Live Music", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "cash"], is_builtin: true },
+  { key: "builtin-comedy", name: "單口喜劇", type: "expense", categoryNames: ["單口喜劇", "娛樂"], budgetNames: ["單口喜劇", "娛樂"], merchant: "單口喜劇", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "cash"], is_builtin: true },
+  { key: "builtin-fine-dining", name: "高端餐飲", type: "expense", categoryNames: ["高端餐飲", "餐飲"], budgetNames: ["高端餐飲"], merchant: "餐廳", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card"], is_builtin: true },
+  { key: "builtin-travel", name: "出國 / 旅行", type: "expense", categoryNames: ["旅行", "出國"], budgetNames: ["出國", "旅行"], merchant: "旅行", cashflow_nature: "one_time", necessity_level: "luxury", accountTypes: ["credit_card", "bank", "cash"], is_builtin: true },
+  { key: "builtin-income", name: "收入", type: "income", categoryNames: ["薪資", "其他收入"], budgetNames: [], merchant: "收入", cashflow_nature: "variable", necessity_level: "other", accountTypes: ["bank", "cash"], is_builtin: true },
+  { key: "builtin-refund", name: "退款", type: "refund", categoryNames: ["退款", "其他"], budgetNames: [], merchant: "退款", cashflow_nature: "one_time", necessity_level: "other", accountTypes: ["credit_card", "bank", "cash"], is_builtin: true }
 ];
 
-function activeQuickTemplates() {
-  return (state.data.quickTemplates || [])
-    .filter(t => t.is_active !== false)
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name || "").localeCompare(String(b.name || "")))
-    .map(t => ({ ...t, key: `custom-${t.id}`, is_builtin: false }));
+function resolveTemplateAccount(type, accountTypes = []) {
+  const preferred = defaultAccountIdFor(type);
+  if (preferred) return preferred;
+  const rows = state.data.accounts.filter(a => a.is_active !== false);
+  const found = rows.find(a => accountTypes.includes(a.type)) || rows[0];
+  return found?.id || "";
 }
 
-function renderQuickTxTemplates(type = state.draftTxType || "expense") {
-  const allTemplates = activeQuickTemplates();
-  const templates = allTemplates.filter(t => (t.type || "expense") === type);
-  return `
-    <div class="quick-template-panel">
-      <div class="quick-template-title">
-        <strong>${escapeHtml(labelOf(type))}快速模板</strong>
-        <span>${templates.length ? `${templates.length} 個自訂模板` : "此類型尚無模板"}</span>
-      </div>
-      ${templates.length ? `
-        <div class="quick-template-grid">
-          ${templates.map(t => `<button type="button" class="quick-template-btn" data-tx-template="${escapeHtml(t.key)}">${escapeHtml(t.name || "模板")}</button>`).join("")}
-        </div>
-      ` : `
-        <div class="empty compact-empty">此交易類型還沒有模板。到「模板管理」新增，或匯入預設模板後自行編輯。</div>
-        <div class="btn-row">
-          <button type="button" class="btn small secondary" data-go="templates">去模板管理</button>
-        </div>
-      `}
-    </div>
-  `;
-}
-
-function findCategoryByNames(names = []) {
+function findByNames(rows, names = []) {
   const normalized = names.map(n => String(n).toLowerCase());
-  return state.data.categories.find(c => normalized.includes(String(c.name || "").toLowerCase()))
-    || state.data.categories.find(c => c.type === "expense" && normalized.some(n => String(c.name || "").toLowerCase().includes(n)))
-    || null;
+  return rows.find(row => normalized.includes(String(row.name || "").toLowerCase()));
 }
 
-function findBudgetItemByNames(names = []) {
-  const normalized = names.map(n => String(n).toLowerCase());
-  return budgetItemSummariesForSelectedYear().find(i => normalized.includes(String(i.name || "").toLowerCase()))
-    || budgetItemSummariesForSelectedYear().find(i => normalized.some(n => String(i.name || "").toLowerCase().includes(n)))
-    || null;
-}
-
-function findAccountByTypes(types = []) {
-  return state.data.accounts.find(a => a.is_active !== false && types.includes(a.type))
-    || state.data.accounts.find(a => a.is_active !== false)
-    || null;
-}
-
-function setSelectValue(field, value) {
-  if (!field || value === undefined || value === null) return;
-  const valueString = String(value);
-
-  // v28：同時支援 select、hidden input、一般 input。
-  // v27 把交易類型改成 hidden input 後，舊版只處理 select.options，導致快速模板點擊時噴錯。
-  if (field.tagName === "SELECT") {
-    if (![...field.options].some(o => o.value === valueString)) return;
-    field.value = valueString;
-    return;
-  }
-
-  field.value = valueString;
-}
-
-function applyQuickTxTemplate(key) {
-  const template = activeQuickTemplates().find(t => t.key === key);
-  const form = $("#txForm");
-  if (!template || !form) return;
-
-  try {
-    const category = template.category_id
-      ? state.data.categories.find(c => c.id === template.category_id)
-      : findCategoryByNames(template.categoryNames || []);
-    const budgetItem = template.budget_item_id
-      ? budgetItemSummariesForSelectedYear().find(i => i.budget_item_id === template.budget_item_id || i.id === template.budget_item_id)
-      : findBudgetItemByNames(template.budgetNames || []);
-    const account = template.account_id
-      ? state.data.accounts.find(a => a.id === template.account_id)
-      : findAccountByTypes(template.accountTypes || []);
-    const toAccount = template.to_account_id
-      ? state.data.accounts.find(a => a.id === template.to_account_id)
-      : null;
-
-    const type = template.type || "expense";
-    setSelectValue(form.elements.type, type);
-    state.draftTxType = type;
-    setSelectValue(form.elements.account_id, form.elements.account_id.value || account?.id || "");
-    setSelectValue(form.elements.to_account_id, toAccount?.id || "");
-    setSelectValue(form.elements.category_id, category?.id || "");
-    setSelectValue(form.elements.budget_item_id, budgetItem?.budget_item_id || budgetItem?.id || "");
-    setSelectValue(form.elements.necessity_level, template.necessity_level || template.necessity || defaultNecessityByType(type));
-    setSelectValue(form.elements.cashflow_nature, template.cashflow_nature || template.cashflow || defaultCashflowByType(type));
-    setSelectValue(form.elements.status, "cleared");
-
-    if (form.elements.merchant && !form.elements.merchant.value) form.elements.merchant.value = template.merchant || template.name || template.label || "";
-    if (form.elements.payment_method && !form.elements.payment_method.value) form.elements.payment_method.value = template.payment_method || (account?.type === "credit_card" ? "信用卡" : labelOf(account?.type || ""));
-    if (form.elements.note && !form.elements.note.value && template.note) form.elements.note.value = template.note;
-
-    form.elements.amount?.focus();
-    form.elements.amount?.select?.();
-    showAlert(`已套用模板：${escapeHtml(template.name || template.label || "模板")}。`, "good");
-  } catch (error) {
-    showAlert(`套用模板失敗：${escapeHtml(error.message)}`, "bad");
-  }
-}
-
-
-
-function txModeButton(type, current) {
-  const labels = {
-    expense: ["支出", "消費 / 預算"],
-    income: ["收入", "薪資 / 股息"],
-    transfer: ["轉帳", "繳卡 / 投資"],
-    refund: ["退款", "退貨 / 退票"],
-    asset_adjustment: ["資產調整", "校正 / 盤點"]
+function templateToDraft(template) {
+  const type = template.type || "expense";
+  const category = template.category_id
+    ? state.data.categories.find(c => c.id === template.category_id)
+    : findByNames(state.data.categories, template.categoryNames || []);
+  const budget = template.budget_item_id
+    ? state.data.budgetItems.find(b => b.id === template.budget_item_id)
+    : findByNames(state.data.budgetItems.filter(b => b.year_id === state.selectedYearId), template.budgetNames || []);
+  return {
+    transaction_date: today(),
+    type,
+    account_id: template.default_account_id || resolveTemplateAccount(type, template.accountTypes || []),
+    to_account_id: template.default_to_account_id || "",
+    category_id: category?.id || "",
+    budget_item_id: budget?.id || "",
+    merchant: template.merchant || template.name || "",
+    payment_method: template.payment_method || "",
+    necessity_level: template.necessity_level || defaultNecessityByType(type),
+    cashflow_nature: template.cashflow_nature || defaultCashflowByType(type),
+    control_level: template.control_level || "controllable",
+    amount: template.default_amount || "",
+    note: template.note || ""
   };
-  const [title, sub] = labels[type] || [labelOf(type), ""];
+}
+
+function quickTemplateRows(type) {
+  const custom = state.data.quickTemplates
+    .filter(t => t.is_active !== false && t.type === type)
+    .map(t => ({ ...t, is_builtin: false }));
+  const builtins = fallbackQuickTemplates.filter(t => t.type === type);
+  return [...custom, ...builtins];
+}
+
+function renderQuickTxTemplates(type) {
+  const rows = quickTemplateRows(type).slice(0, 14);
+  if (!rows.length) return "";
   return `
-    <button type="button" class="tx-mode-btn ${current === type ? "active" : ""}" data-tx-mode="${escapeHtml(type)}">
-      <strong>${escapeHtml(title)}</strong>
-      <span>${escapeHtml(sub)}</span>
-    </button>
+    <div class="quick-template-bar">
+      ${rows.map(t => `
+        <button class="chip ${t.is_builtin ? "muted-chip" : ""}" type="button" data-quick-template="${escapeHtml(t.id || t.key)}" data-template-kind="${t.is_builtin ? "builtin" : "custom"}">
+          ${escapeHtml(t.name)}
+        </button>
+      `).join("")}
+    </div>
   `;
 }
 
-function renderTxModePicker(current) {
-  return `
-    <div class="tx-mode-panel">
-      ${["expense", "income", "transfer", "refund", "asset_adjustment"].map(t => txModeButton(t, current)).join("")}
-    </div>
-  `;
+function transactionDraftFromTemplate(id, kind) {
+  const row = kind === "builtin"
+    ? fallbackQuickTemplates.find(t => t.key === id)
+    : state.data.quickTemplates.find(t => t.id === id);
+  return row ? templateToDraft(row) : null;
+}
+
+function txDraftValue(field, edit = {}) {
+  if (edit && Object.prototype.hasOwnProperty.call(edit, field)) return edit[field] ?? "";
+  if (state.transactionDraft && Object.prototype.hasOwnProperty.call(state.transactionDraft, field)) return state.transactionDraft[field] ?? "";
+  return "";
+}
+
+function defaultNecessityByType(type) {
+  if (type === "income" || type === "transfer") return "other";
+  return "quality";
+}
+
+function defaultCashflowByType(type) {
+  if (type === "income") return "variable";
+  if (type === "transfer") return "variable";
+  return "variable";
+}
+
+function renderTxModePicker(type) {
+  const modes = ["expense", "income", "transfer", "refund", "asset_adjustment"];
+  return `<div class="segmented">${modes.map(m => `<button type="button" class="seg-btn ${m === type ? "active" : ""}" data-tx-mode="${m}">${escapeHtml(labelOf(m))}</button>`).join("")}</div>`;
 }
 
 function renderTxPrimaryFields(type, edit = {}) {
-  const accountLabel = type === "income" ? "入帳帳戶" : type === "transfer" ? "轉出帳戶" : type === "refund" ? "退款入帳帳戶" : type === "asset_adjustment" ? "調整帳戶" : "付款帳戶";
-  const defaultAccount = edit?.account_id || defaultAccountIdFor(type);
-  const merchantLabel = type === "income" ? "收入來源" : type === "transfer" ? "用途" : type === "refund" ? "退款來源" : type === "asset_adjustment" ? "調整原因" : "商家 / 對象";
-  const merchantPlaceholder = type === "income" ? "例：打工薪資、股息、退稅" : type === "transfer" ? "例：信用卡繳款、投資轉帳" : type === "refund" ? "例：退票退款、退貨退款" : type === "asset_adjustment" ? "例：現金盤點、證券戶市值校正" : "例：早餐、威秀、Blue Note";
-  const categoryLabel = type === "income" ? "收入分類" : "分類";
-
-  const amountMin = type === "asset_adjustment" ? "" : 'min="0"';
-  const amountPlaceholder = type === "asset_adjustment" ? "正數=帳戶增加，負數=帳戶減少" : "輸入金額";
+  const transactionDate = txDraftValue("transaction_date", edit) || today();
+  const amount = txDraftValue("amount", edit);
+  const account = txDraftValue("account_id", edit) || defaultAccountIdFor(type);
+  const toAccount = txDraftValue("to_account_id", edit) || defaultAccountIdFor("transfer");
+  const category = txDraftValue("category_id", edit);
+  const budget = txDraftValue("budget_item_id", edit);
+  const merchant = txDraftValue("merchant", edit);
+  const adjustmentDirection = txDraftValue("adjustment_direction", edit) || "increase";
 
   const fields = [
-    field("日期", `<input class="input" type="date" name="transaction_date" value="${escapeHtml(edit?.transaction_date || today())}" required>`),
-    field("金額", `<input class="input tx-amount-input" type="number" ${amountMin} step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="${amountPlaceholder}">`),
-    field(accountLabel, `<select class="input" name="account_id" required>${accountOptions(defaultAccount || "")}</select>`)
+    field("日期", `<input class="input" type="date" name="transaction_date" value="${escapeHtml(transactionDate)}" required>`),
+    field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(amount)}" placeholder="輸入金額" required>`)
   ];
 
   if (type === "transfer") {
-    fields.push(field("轉入帳戶", `<select class="input" name="to_account_id" required>${accountOptions(edit?.to_account_id || "")}</select>`));
-    fields.push(field("用途", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="${merchantPlaceholder}">`));
+    fields.push(field("轉出帳戶", `<select class="input" name="account_id" required>${accountOptions(account)}</select>`));
+    fields.push(field("轉入帳戶", `<select class="input" name="to_account_id" required>${accountOptions(toAccount)}</select>`));
+  } else if (type === "income") {
+    fields.push(field("入帳帳戶", `<select class="input" name="account_id" required>${accountOptions(account)}</select>`));
+    fields.push(field("分類", `<select class="input" name="category_id">${categoryOptions("income", category)}</select>`));
+  } else if (type === "refund") {
+    fields.push(field("退款帳戶", `<select class="input" name="account_id" required>${accountOptions(account)}</select>`));
+    fields.push(field("分類", `<select class="input" name="category_id">${categoryOptions("expense", category)}</select>`));
+    fields.push(field("預算項目", `<select class="input" name="budget_item_id">${budgetOptions(budget)}</select>`));
   } else if (type === "asset_adjustment") {
+    fields.push(field("調整帳戶", `<select class="input" name="account_id" required>${accountOptions(account)}</select>`));
     fields.push(field("調整方向", `<select class="input" name="adjustment_direction">
-      <option value="increase" ${edit?.adjustment_direction !== "decrease" ? "selected" : ""}>帳戶增加</option>
-      <option value="decrease" ${edit?.adjustment_direction === "decrease" ? "selected" : ""}>帳戶減少</option>
+      <option value="increase" ${adjustmentDirection !== "decrease" ? "selected" : ""}>增加資產</option>
+      <option value="decrease" ${adjustmentDirection === "decrease" ? "selected" : ""}>減少資產</option>
     </select>`));
-    fields.push(field(merchantLabel, `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="${merchantPlaceholder}">`));
   } else {
-    fields.push(field(categoryLabel, `<select class="input" name="category_id">${categoryOptions(type, edit?.category_id || "")}</select>`));
-    if (type === "expense" || type === "refund") {
-      fields.push(field("預算項目", `<select class="input" name="budget_item_id">${budgetItemOptions(edit?.budget_item_id || "")}</select>`));
-    }
-    if (type === "refund") {
-      fields.push(field("關聯原支出", `<select class="input" name="related_transaction_id">${expenseTransactionOptions(edit?.related_transaction_id || "")}</select>`));
-    }
-    fields.push(field(merchantLabel, `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="${merchantPlaceholder}">`));
+    fields.push(field("付款帳戶", `<select class="input" name="account_id" required>${accountOptions(account)}</select>`));
+    fields.push(field("分類", `<select class="input" name="category_id">${categoryOptions("expense", category)}</select>`));
+    fields.push(field("預算項目", `<select class="input" name="budget_item_id">${budgetOptions(budget)}</select>`));
   }
 
+  fields.push(field("商家 / 對象", `<input class="input" name="merchant" value="${escapeHtml(merchant)}" placeholder="例：早餐、威秀、Blue Note">`));
   return fields.join("");
 }
 
-
-function splitLinesForTransaction(transactionId) {
-  if (!transactionId) return "";
-  return (state.data.transactionSplits || [])
-    .filter(s => s.transaction_id === transactionId)
-    .map(s => {
-      const cat = state.data.categories.find(c => c.id === s.category_id);
-      const bi = state.data.budgetItems.find(b => b.id === s.budget_item_id);
-      return [cat?.name || "", s.amount || "", bi?.name || ""].filter(Boolean).join(",");
-    })
-    .join("\n");
-}
-
-function parseSplitLines(text, type = "expense") {
-  const lines = String(text || "").split(/\n+/).map(x => x.trim()).filter(Boolean);
-  return lines.map((line, index) => {
-    const parts = line.split(",").map(x => x.trim());
-    if (parts.length < 2) throw new Error(`拆帳第 ${index + 1} 行格式錯誤，請用：分類,金額,預算項目`);
-    const [categoryName, amountText, budgetName] = parts;
-    const category = state.data.categories.find(c => c.type === categoryTypeFor(type) && c.name === categoryName);
-    if (!category) throw new Error(`找不到拆帳分類：${categoryName}`);
-    const budget = budgetName ? state.data.budgetItems.find(b => b.year_id === state.selectedYearId && b.name === budgetName) : null;
-    if (budgetName && !budget) throw new Error(`找不到拆帳預算項目：${budgetName}`);
-    const amount = Number(String(amountText).replaceAll(",", ""));
-    if (!Number.isFinite(amount) || amount <= 0) throw new Error(`拆帳金額錯誤：${amountText}`);
-    return {
-      category_id: category.id,
-      budget_item_id: budget?.id || null,
-      amount,
-      note: null
-    };
-  });
-}
-
 function renderTxAdvancedFields(type, edit = {}) {
+  const necessity = txDraftValue("necessity_level", edit) || defaultNecessityByType(type);
+  const cashflow = txDraftValue("cashflow_nature", edit) || defaultCashflowByType(type);
+  const payment = txDraftValue("payment_method", edit);
+  const note = txDraftValue("note", edit);
+  const status = txDraftValue("status", edit) || "cleared";
+  const splitLines = txDraftValue("split_lines", edit);
+
   return `
     <details class="advanced-fields wide">
       <summary>進階欄位</summary>
-      <div class="form-grid">
-        ${type !== "transfer" && type !== "asset_adjustment" ? field("轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`) : ""}
-        ${type !== "refund" && type !== "asset_adjustment" ? field("關聯原支出", `<select class="input" name="related_transaction_id">${expenseTransactionOptions(edit?.related_transaction_id || "")}</select>`) : ""}
-        ${(type === "expense" || type === "refund") ? `<div class="field wide">
+      <div class="form-grid two">
+        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(payment)}" placeholder="Apple Pay / 現金 / 分期">`)}
+        ${field("狀態", `<select class="input" name="status">${selectOpts(["cleared","pending","cancelled"], status)}</select>`)}
+        ${field("必要程度", `<select class="input" name="necessity_level">${selectOpts(["survival","quality","luxury","investment","other"], necessity)}</select>`)}
+        ${field("現金流性質", `<select class="input" name="cashflow_nature">${selectOpts(["fixed","variable","one_time"], cashflow)}</select>`)}
+        <div class="field wide">
           <label>拆帳</label>
-          <textarea class="input" name="split_lines" placeholder="每行一筆：分類,金額,預算項目（預算項目可省略）">${escapeHtml(splitLinesForTransaction(edit?.id))}</textarea>
-        </div>` : ""}
-        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="現金 / 信用卡 / 轉帳 / Apple Pay">`)}
-        ${field("必要程度", `<select class="input" name="necessity_level">
-          ${selectOpts(["survival","quality","luxury","investment","other"], edit?.necessity_level || defaultNecessityByType(type))}
-        </select>`)}
-        ${field("現金流性質", `<select class="input" name="cashflow_nature">
-          ${selectOpts(["fixed","variable","one_time"], edit?.cashflow_nature || defaultCashflowByType(type))}
-        </select>`)}
-        ${field("狀態", `<select class="input" name="status">
-          ${selectOpts(["cleared","pending","cancelled"], edit?.status || "cleared")}
-        </select>`)}
+          <textarea class="input" name="split_lines" placeholder="每行格式：金額 | 分類名稱 | 預算項目｜例：100 | 餐飲 | 日常花費">${escapeHtml(splitLines || "")}</textarea>
+        </div>
         <div class="field wide">
           <label>備註</label>
-          <textarea class="input" name="note" placeholder="補充說明">${escapeHtml(edit?.note || "")}</textarea>
+          <textarea class="input" name="note">${escapeHtml(note || "")}</textarea>
         </div>
       </div>
     </details>
   `;
 }
 
-function defaultNecessityByType(type) {
-  if (type === "income" || type === "transfer" || type === "asset_adjustment") return "other";
-  if (type === "refund") return "other";
-  return "quality";
-}
-
-function defaultCashflowByType(type) {
-  if (type === "income") return "fixed";
-  if (type === "transfer" || type === "asset_adjustment") return "one_time";
-  if (type === "refund") return "one_time";
-  return "variable";
-}
-
 function renderTransactions() {
   const edit = state.editing.transaction;
   const type = edit?.type || state.draftTxType || "expense";
   const rows = applyTxFilters(transactionsForSelectedYear());
+  const previewRows = rows.slice(0, RECENT_TRANSACTION_LIMIT);
+  const previewLabel = previewRows.length ? `最近 ${previewRows.length} 筆` : "0 筆";
+  const hasMoreRows = rows.length > RECENT_TRANSACTION_LIMIT;
 
   return `
     <div class="card">
@@ -1651,11 +1349,13 @@ function renderTransactions() {
     <details class="card collapsible-card">
       <summary class="collapsible-summary">
         <span>最近交易（點擊展開 / 收合）</span>
-        <span class="badge">${rows.length} 筆</span>
+        <span class="badge">${previewLabel}</span>
       </summary>
       <div class="collapsible-body">
         ${renderTxFilters()}
-        ${renderTxTable(rows)}
+        <p class="metric-sub">此區只顯示最近 ${RECENT_TRANSACTION_LIMIT} 筆預覽，避免資料累積後畫面爆量；要找舊資料請用日期、搜尋、分類或帳戶篩選縮小範圍。</p>
+        ${hasMoreRows ? `<p class="metric-sub">目前篩選結果超過 ${RECENT_TRANSACTION_LIMIT} 筆，以下僅顯示最前面的 ${RECENT_TRANSACTION_LIMIT} 筆。</p>` : ""}
+        ${renderTxTable(previewRows)}
       </div>
     </details>
   `;
@@ -1703,37 +1403,29 @@ function renderTxTable(rows) {
         <div class="mobile-data-card">
           <div class="mobile-data-head">
             <div>
-              <strong>${escapeHtml(t.merchant || t.category_name || "未命名交易")}</strong>
-              <span>${escapeHtml(t.transaction_date)} · ${escapeHtml(t.account_name || "")}</span>
+              <strong>${escapeHtml(t.merchant || t.category_name || labelOf(t.type))}</strong>
+              <span>${escapeHtml(t.transaction_date)}｜${escapeHtml(t.account_name || "")}</span>
             </div>
-            <div class="mobile-amount ${(t.type === "income" || t.type === "refund") ? "good" : t.type === "expense" ? "bad" : ""}">
-              ${fmtMoney(t.amount)}
-            </div>
+            <div class="mobile-amount ${(t.type === "income" || t.type === "refund") ? "good" : t.type === "expense" ? "bad" : ""}">${fmtMoney(t.amount)}</div>
           </div>
           <div class="mobile-data-meta">
-            ${typeBadge(t.type)}
-            <span class="badge">${escapeHtml(t.category_name || "未分類")}</span>
-            ${t.budget_item_name ? `<span class="badge">${escapeHtml(t.budget_item_name)}</span>` : ""}
-            <span class="badge">${escapeHtml(labelOf(t.status))}</span>
+            <span>${escapeHtml(labelOf(t.type))}</span>
+            <span>${escapeHtml(t.category_name || "未分類")}</span>
+            ${t.budget_item_name ? `<span>${escapeHtml(t.budget_item_name)}</span>` : ""}
+            ${t.status ? `<span>${escapeHtml(labelOf(t.status))}</span>` : ""}
           </div>
-          ${t.note ? `<p class="mobile-note">${escapeHtml(t.note)}</p>` : ""}
           <div class="mobile-card-actions">
-            <button class="btn small secondary" type="button" data-edit-tx="${t.id}">編輯</button>
-            <button type="button" class="btn small danger" data-delete="transactions:${t.id}">刪除</button>
+            <button type="button" class="btn small secondary" data-edit-tx="${escapeHtml(t.id)}">編輯</button>
+            <button type="button" class="btn small danger" data-delete="transactions:${escapeHtml(t.id)}">刪除</button>
           </div>
         </div>
       `).join("")}
-    </div>
-  `;
+    </div>`;
 
   const tableView = `
     <div class="table-wrap desktop-table">
       <table>
-        <thead>
-          <tr>
-            <th>日期</th><th>類型</th><th>帳戶</th><th>分類</th><th>預算項目</th><th>金額</th><th>商家</th><th>備註</th><th>狀態</th><th>操作</th>
-          </tr>
-        </thead>
+        <thead><tr><th>日期</th><th>類型</th><th>帳戶</th><th>分類</th><th>預算項目</th><th>金額</th><th>商家</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody>
           ${rows.map(t => `
             <tr>
@@ -1747,1101 +1439,40 @@ function renderTxTable(rows) {
               <td>${escapeHtml(t.note || "")}</td>
               <td>${escapeHtml(labelOf(t.status))}</td>
               <td class="actions">
-                <button class="btn small secondary" data-edit-tx="${t.id}">編輯</button>
-                <button type="button" class="btn small danger" data-delete="transactions:${t.id}">刪除</button>
+                <button class="btn small secondary" data-edit-tx="${escapeHtml(t.id)}">編輯</button>
+                <button class="btn small danger" data-delete="transactions:${escapeHtml(t.id)}">刪除</button>
               </td>
             </tr>
           `).join("")}
         </tbody>
       </table>
-    </div>
-  `;
-
-  return `${mobileCards}${tableView}`;
-}
-
-
-
-function budgetContributionOptions(selected = "") {
-  const rows = budgetItemSummariesForSelectedYear()
-    .filter(i => i.is_active !== false)
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name)));
-  return optionList(rows, selected, "name", "budget_item_id", "請選擇預算項目");
-}
-
-function enrichedBudgetContributionsForSelectedYear() {
-  return (state.data.budgetContributions || [])
-    .filter(c => contributionYear(c.contribution_date) === Number(state.selectedBudgetYear))
-    .map(c => {
-      const item = state.data.budgetItems.find(i => i.id === c.budget_item_id) || {};
-      return {
-        ...c,
-        budget_item_name: item.name || "未命名項目",
-        period_type: item.period_type || "",
-        rollover_mode: item.rollover_mode || ""
-      };
-    })
-    .sort((a, b) => String(b.contribution_date || "").localeCompare(String(a.contribution_date || "")) || String(b.created_at || "").localeCompare(String(a.created_at || "")));
-}
-
-function renderBudgetContributionSection(items) {
-  const edit = state.editing.budgetContribution;
-  const rows = enrichedBudgetContributionsForSelectedYear();
-
-  return `
-    <div class="card">
-      <div class="card-title-row">
-        <h3>${edit ? "編輯預算提撥" : "新增預算提撥"}</h3>
-        <span class="badge">手動提撥紀錄</span>
-      </div>
-      <p class="metric-sub">提撥型預算現在以「實際提撥紀錄」為準，不再用系統推估次數。適合出國、高端餐飲、大額購物等累積型預算。</p>
-      <form id="budgetContributionForm" class="form-grid">
-        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-        ${field("預算項目", `<select class="input" name="budget_item_id" required>${budgetContributionOptions(edit?.budget_item_id || "")}</select>`)}
-        ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(edit?.contribution_date || today())}" required>`)}
-        ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="例：20000">`)}
-        <div class="field wide">
-          <label>備註</label>
-          <textarea class="input" name="note" placeholder="例：5 月旅行基金、加碼提撥">${escapeHtml(edit?.note || "")}</textarea>
-        </div>
-        <div class="wide btn-row">
-          <button class="btn" type="submit">${edit ? "儲存修改" : "新增提撥"}</button>
-          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetContribution">取消編輯</button>` : ""}
-        </div>
-      </form>
-    </div>
-
-    <details class="card collapsible-card">
-      <summary class="collapsible-summary">
-        <span>提撥紀錄（點擊展開 / 收合）</span>
-        <span class="badge">${rows.length} 筆</span>
-      </summary>
-      <div class="collapsible-body">
-        ${renderBudgetContributionTable(rows)}
-      </div>
-    </details>
-  `;
-}
-
-function renderBudgetContributionTable(rows) {
-  if (!rows.length) return `<div class="empty">尚無提撥紀錄。提撥型預算需要先新增提撥，才會產生可用額度。</div>`;
-
-  const mobileCards = `
-    <div class="mobile-card-list">
-      ${rows.slice(0, 80).map(r => `
-        <div class="mobile-data-card">
-          <div class="mobile-data-head">
-            <div>
-              <strong>${escapeHtml(r.budget_item_name)}</strong>
-              <span>${escapeHtml(r.contribution_date || "")}</span>
-            </div>
-            <div class="mobile-amount">${fmtMoney(r.amount)}</div>
-          </div>
-          <div class="mobile-data-meta">
-            ${r.note ? `<span>${escapeHtml(r.note)}</span>` : ""}
-          </div>
-          <div class="mobile-card-actions">
-            <button class="btn small secondary" type="button" data-edit-contribution="${r.id}">編輯</button>
-            <button type="button" class="btn small danger" data-delete="budget_contributions:${r.id}">刪除</button>
-          </div>
-        </div>
-      `).join("")}
-    </div>
-  `;
-
-  const tableView = `
-    <div class="table-wrap desktop-table">
-      <table>
-        <thead><tr><th>日期</th><th>預算項目</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
-        <tbody>
-          ${rows.slice(0, 120).map(r => `
-            <tr>
-              <td>${escapeHtml(r.contribution_date || "")}</td>
-              <td>${escapeHtml(r.budget_item_name)}</td>
-              <td class="mono good">${fmtMoney(r.amount)}</td>
-              <td>${escapeHtml(r.note || "")}</td>
-              <td class="actions">
-                <button class="btn small secondary" type="button" data-edit-contribution="${r.id}">編輯</button>
-                <button type="button" class="btn small danger" data-delete="budget_contributions:${r.id}">刪除</button>
-              </td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  return `${mobileCards}${tableView}`;
-}
-
-
-function enrichedBudgetMovementsForSelectedYear() {
-  return (state.data.budgetMovements || [])
-    .filter(m => contributionYear(m.movement_date) === Number(state.selectedBudgetYear))
-    .map(m => {
-      const fromItem = state.data.budgetItems.find(i => i.id === m.from_budget_item_id) || {};
-      const toItem = state.data.budgetItems.find(i => i.id === m.to_budget_item_id) || {};
-      return {
-        ...m,
-        from_name: fromItem.name || "未指定",
-        to_name: toItem.name || "未指定"
-      };
-    })
-    .sort((a, b) => String(b.movement_date || "").localeCompare(String(a.movement_date || "")) || String(b.created_at || "").localeCompare(String(a.created_at || "")));
-}
-
-function renderBudgetMovementSection() {
-  const edit = state.editing.budgetMovement;
-  const rows = enrichedBudgetMovementsForSelectedYear();
-  return `
-    <div class="card">
-      <div class="card-title-row">
-        <h3>${edit ? "編輯預算移轉" : "預算項目移轉"}</h3>
-        <span class="badge">Envelope</span>
-      </div>
-      <p class="metric-sub">用來把一個 envelope 的餘額挪到另一個 envelope，例如「高端餐飲」轉 2,000 到「出國」。這不是收入，也不是支出。</p>
-      <form id="budgetMovementForm" class="form-grid">
-        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-        ${field("日期", `<input class="input" type="date" name="movement_date" value="${escapeHtml(edit?.movement_date || today())}" required>`)}
-        ${field("從哪個預算扣", `<select class="input" name="from_budget_item_id" required>${budgetContributionOptions(edit?.from_budget_item_id || "")}</select>`)}
-        ${field("移到哪個預算", `<select class="input" name="to_budget_item_id" required>${budgetContributionOptions(edit?.to_budget_item_id || "")}</select>`)}
-        ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
-        <div class="field wide">
-          <label>備註</label>
-          <textarea class="input" name="note" placeholder="例：月底補出國預算">${escapeHtml(edit?.note || "")}</textarea>
-        </div>
-        <div class="wide btn-row">
-          <button class="btn" type="submit">${edit ? "儲存修改" : "新增移轉"}</button>
-          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetMovement">取消編輯</button>` : ""}
-        </div>
-      </form>
-    </div>
-
-    <details class="card collapsible-card">
-      <summary class="collapsible-summary">
-        <span>預算移轉紀錄（點擊展開 / 收合）</span>
-        <span class="badge">${rows.length} 筆</span>
-      </summary>
-      <div class="collapsible-body">
-        ${renderBudgetMovementTable(rows)}
-      </div>
-    </details>
-  `;
-}
-
-function renderBudgetMovementTable(rows) {
-  if (!rows.length) return `<div class="empty">尚無預算移轉紀錄。</div>`;
-  const mobileCards = `
-    <div class="mobile-card-list">
-      ${rows.slice(0, 80).map(r => `
-        <div class="mobile-data-card">
-          <div class="mobile-data-head">
-            <div>
-              <strong>${escapeHtml(r.from_name)} → ${escapeHtml(r.to_name)}</strong>
-              <span>${escapeHtml(r.movement_date || "")}</span>
-            </div>
-            <div class="mobile-amount">${fmtMoney(r.amount)}</div>
-          </div>
-          <div class="mobile-data-meta">${r.note ? `<span>${escapeHtml(r.note)}</span>` : ""}</div>
-          <div class="mobile-card-actions">
-            <button class="btn small secondary" type="button" data-edit-movement="${r.id}">編輯</button>
-            <button type="button" class="btn small danger" data-delete="budget_movements:${r.id}">刪除</button>
-          </div>
-        </div>
-      `).join("")}
-    </div>`;
-  const tableView = `
-    <div class="table-wrap desktop-table">
-      <table>
-        <thead><tr><th>日期</th><th>從</th><th>到</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
-        <tbody>${rows.slice(0, 120).map(r => `
-          <tr>
-            <td>${escapeHtml(r.movement_date || "")}</td>
-            <td>${escapeHtml(r.from_name)}</td>
-            <td>${escapeHtml(r.to_name)}</td>
-            <td class="mono">${fmtMoney(r.amount)}</td>
-            <td>${escapeHtml(r.note || "")}</td>
-            <td class="actions">
-              <button class="btn small secondary" type="button" data-edit-movement="${r.id}">編輯</button>
-              <button type="button" class="btn small danger" data-delete="budget_movements:${r.id}">刪除</button>
-            </td>
-          </tr>`).join("")}</tbody>
-      </table>
     </div>`;
   return `${mobileCards}${tableView}`;
 }
 
-
-function monthEndKey(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+function typeBadge(type) {
+  const cls = type === "income" ? "good" : type === "refund" ? "warn" : type === "expense" ? "bad" : "";
+  return `<span class="badge ${cls}">${escapeHtml(labelOf(type))}</span>`;
 }
 
-function daysLeftInMonth(date = new Date()) {
-  const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-  return lastDay - date.getDate();
-}
-
-function isMonthEndWindow(date = new Date()) {
-  // 不做背景推播；使用者在不會自動跳出、不會自動分類；你按按鈕後才會開始分配。
-  return daysLeftInMonth(date) <= 2;
-}
-
-function monthCloseAlreadyAsked(date = new Date()) {
-  return appPreference(`month_close_asked_${monthEndKey(date)}`, "") === "1";
-}
-
-function markMonthCloseAsked(date = new Date()) {
-  setAppPreference(`month_close_asked_${monthEndKey(date)}`, "1");
-}
-
-function monthCloseSourceRows() {
-  return budgetItemSummariesForSelectedYear()
-    .filter(r => (r.period_type || "annual") === "monthly")
-    .filter(r => Number(r.month_remaining_amount ?? r.remaining_amount ?? 0) > 0)
-    .map(r => ({
-      ...r,
-      remaining_amount: Number(r.month_remaining_amount ?? r.remaining_amount ?? 0),
-      current_budget_amount: Number(r.month_budget_amount ?? r.current_budget_amount ?? 0),
-      actual_amount: Number(r.month_actual_amount ?? r.actual_amount ?? 0),
-      primary_scope: "month",
-      scope_label: `${currentBudgetMonth()}月`
-    }))
-    .sort((a, b) => Number(b.remaining_amount || 0) - Number(a.remaining_amount || 0));
-}
-
-function monthCloseTargetRows(sourceId = "") {
-  return budgetItemSummariesForSelectedYear()
-    .filter(r => r.budget_item_id !== sourceId)
-    .filter(r => r.is_active !== false)
-    .sort((a, b) => {
-      // 提撥型優先當目標，其次照剩餘額度與名稱排序。
-      if (a.is_contribution_mode !== b.is_contribution_mode) return a.is_contribution_mode ? -1 : 1;
-      return (a.sort_order || 0) - (b.sort_order || 0) || String(a.name).localeCompare(String(b.name));
-    });
-}
-
-function numberedPromptList(rows, labelFn) {
-  return rows.map((r, idx) => `${idx + 1}. ${labelFn(r)}`).join("\n");
-}
-
-function pickByNumber(input, rows) {
-  const n = Number(String(input || "").trim());
-  if (!Number.isInteger(n) || n < 1 || n > rows.length) return null;
-  return rows[n - 1];
-}
-
-async function createMonthCloseMovement(source, target, amount, note = "") {
-  const payload = {
-    movement_date: today(),
-    from_budget_item_id: source.budget_item_id,
-    to_budget_item_id: target.budget_item_id,
-    amount: Math.max(0, Number(amount || 0)),
-    movement_type: "manual",
-    note: note || `手動分配結餘：${source.name} → ${target.name}`
-  };
-  if (!payload.amount) throw new Error("移轉金額不可為 0");
-  return await upsert("budget_movements", payload, { expect: { amount: payload.amount, movement_type: "manual" } });
-}
-
-async function runMonthCloseSweepPrompt({ auto = false } = {}) {
-  if (state.monthClosePromptRunning) return;
-  state.monthClosePromptRunning = true;
-
-  try {
-    const sources = monthCloseSourceRows();
-    if (!sources.length) {
-      if (!auto) showAlert("沒有可掃出的固定型月預算結餘。", "warn");
-      return;
-    }
-
-    const sourceInput = window.prompt(
-      `手動分配結餘：選擇要從哪個每月預算項目分配 ${currentBudgetMonth()} 月結餘。\n\n${numberedPromptList(sources, r => `${r.name}｜剩餘 ${fmtMoney(r.remaining_amount)}`)}\n\n輸入編號；取消或空白 = 不處理`,
-      "1"
-    );
-    if (!sourceInput) {
-      if (auto) markMonthCloseAsked();
-      return;
-    }
-
-    const source = pickByNumber(sourceInput, sources);
-    if (!source) {
-      showAlert("手動分配結餘取消：來源編號無效。", "bad");
-      return;
-    }
-
-    const targets = monthCloseTargetRows(source.budget_item_id);
-    if (!targets.length) {
-      showAlert("沒有可移入的目標預算項目。", "bad");
-      return;
-    }
-
-    const targetInput = window.prompt(
-      `要把「${source.name}」剩餘 ${fmtMoney(source.remaining_amount)} 移到哪裡？\n\n${numberedPromptList(targets, r => `${r.name}${r.is_contribution_mode ? "｜提撥型" : "｜固定型"}｜目前可用 ${fmtMoney(r.current_budget_amount)}`)}\n\n輸入編號；取消或空白 = 不處理`,
-      "1"
-    );
-    if (!targetInput) {
-      if (auto) markMonthCloseAsked();
-      return;
-    }
-
-    const target = pickByNumber(targetInput, targets);
-    if (!target) {
-      showAlert("手動分配結餘取消：目標編號無效。", "bad");
-      return;
-    }
-
-    const amountInput = window.prompt(
-      `要移轉多少？\n\n來源：${source.name}\n目標：${target.name}\n可移轉上限：${fmtMoney(source.remaining_amount)}\n\n用預設金額 = 把這個項目的 ${currentBudgetMonth()} 月剩餘額度清空。`,
-      String(Math.round(Number(source.remaining_amount || 0)))
-    );
-    if (!amountInput) {
-      if (auto) markMonthCloseAsked();
-      return;
-    }
-
-    const amount = Number(String(amountInput).replaceAll(",", "").trim());
-    if (!Number.isFinite(amount) || amount <= 0) {
-      showAlert("手動分配結餘取消：金額無效。", "bad");
-      return;
-    }
-    if (amount > Number(source.remaining_amount || 0)) {
-      showAlert(`手動分配結餘取消：金額不可超過來源剩餘 ${fmtMoney(source.remaining_amount)}。`, "bad");
-      return;
-    }
-
-    const ok = await confirmAction(
-      "確認手動分配結餘",
-      `確定要把 ${fmtMoney(amount)} 從「${source.name}」移到「${target.name}」？\n\n這會新增一筆預算移轉，不會新增收入或支出；若金額等於來源剩餘，來源額度會被清空。`
-    );
-    if (!ok) {
-      if (auto) markMonthCloseAsked();
-      return;
-    }
-
-    await createMonthCloseMovement(source, target, amount);
-    markMonthCloseAsked();
-    await loadAll();
-    render();
-    showAlert(`已完成手動分配結餘：${source.name} → ${target.name}，${fmtMoney(amount)}。`, "good", { timeout: 6000 });
-  } catch (error) {
-    showAlert(`手動分配結餘失敗：${escapeHtml(error.message)}`, "bad");
-  } finally {
-    state.monthClosePromptRunning = false;
-  }
-}
-
-function maybeAutoAskMonthCloseSweep() {
-  if (!isMonthEndWindow()) return;
-  if (monthCloseAlreadyAsked()) return;
-  if (!monthCloseSourceRows().length) return;
-
-  // 避免初次載入時阻塞畫面，等 render 完再問。
-  setTimeout(() => {
-    if (!monthCloseAlreadyAsked()) runMonthCloseSweepPrompt({ auto: true });
-  }, 800);
-}
-
-function renderMonthCloseSweepSuggestions() {
-  const sources = monthCloseSourceRows().slice(0, 6);
-  if (!sources.length) return `<p class="metric-sub">目前沒有可掃出的固定型月預算結餘。</p>`;
-  return `
-    <ul class="plain-list">
-      ${sources.map(r => `<li>${escapeHtml(r.name)}：可掃出 ${fmtMoney(r.remaining_amount)}</li>`).join("")}
-    </ul>
-  `;
-}
-
-
-function annualRolloverRows() {
-  return budgetItemSummariesForSelectedYear()
-    .filter(r => r.is_annual_rollover_mode)
-    .filter(r => Number(r.year_remaining_amount ?? r.remaining_amount ?? 0) > 0)
-    .sort((a, b) => Number(b.year_remaining_amount ?? b.remaining_amount ?? 0) - Number(a.year_remaining_amount ?? a.remaining_amount ?? 0));
-}
-
-function annualRolloverDiagnostics() {
-  const items = budgetItemSummariesForSelectedYear();
-  const annualCarry = items.filter(r => r.is_annual_rollover_mode);
-  const annualCarryNoRemaining = annualCarry.filter(r => Number(r.year_remaining_amount ?? r.remaining_amount ?? 0) <= 0);
-  const notAnnualCarry = items.filter(r => !r.is_annual_rollover_mode);
-  return {
-    total: items.length,
-    eligible: annualRolloverRows().length,
-    annualCarry: annualCarry.length,
-    annualCarryNoRemaining: annualCarryNoRemaining.length,
-    notAnnualCarry: notAnnualCarry.length,
-    notAnnualCarryNames: notAnnualCarry.slice(0, 8).map(r => `${r.name}（${labelOf(r.period_type)} + ${labelOf(r.rollover_mode)}）`)
-  };
-}
-
-function budgetAllocationSummary() {
-  const current = getCurrentYearSummary();
-  const items = budgetItemSummariesForSelectedYear();
-  const allocated = items.reduce((sum, i) => sum + Math.max(0, Number(i.current_budget_amount || 0)), 0);
-  const unallocated = Number(current.available_budget || 0) - allocated;
-  return { allocated, unallocated, current };
-}
-
-function renderBudgetAllocationCards() {
-  const s = budgetAllocationSummary();
-  return `
-    <div class="grid cols-3">
-      ${metricCard("項目已分配", fmtMoney(s.allocated), "各項目目前可用額度加總")}
-      ${metricCard(s.unallocated >= 0 ? "尚未分配" : "超額分配", fmtMoney(s.unallocated), s.unallocated >= 0 ? "母池尚有空間" : "項目額度超過全局池", s.unallocated >= 0 ? "good" : "bad")}
-      ${metricCard("年度結轉型項目", `${annualRolloverRows().length} 項`, "每年 + 餘額結轉")}
-    </div>
-  `;
-}
-
-
-function accountBalanceRowsMerged() {
-  return (state.data.accountBalances || []).map(row => {
-    const source = state.data.accounts.find(a => a.id === row.id) || {};
+function parseSplitLines(text = "", type = "expense") {
+  const lines = String(text || "").split("\n").map(l => l.trim()).filter(Boolean);
+  return lines.map((line, idx) => {
+    const parts = line.split("|").map(p => p.trim());
+    if (parts.length < 2) throw new Error(`拆帳第 ${idx + 1} 行格式錯誤，請用：金額 | 分類 | 預算項目`);
+    const amount = Number(parts[0]);
+    if (!amount) throw new Error(`拆帳第 ${idx + 1} 行金額錯誤`);
+    const categoryName = parts[1] || "";
+    const budgetName = parts[2] || "";
+    const category = state.data.categories.find(c => c.name === categoryName && (c.type === type || c.type === "expense" || c.type === "other"));
+    const budget = state.data.budgetItems.find(b => b.name === budgetName && b.year_id === state.selectedYearId);
     return {
-      ...source,
-      ...row,
-      current_balance: Number(row.current_balance ?? source.initial_balance ?? 0),
-      note: source.note || row.note || ""
+      amount: Math.abs(amount),
+      category_id: category?.id || null,
+      budget_item_id: budget?.id || null,
+      note: line
     };
   });
-}
-
-function isAutoCashCoverageAccount(account) {
-  const type = account.type || "";
-  const nameNote = `${account.name || ""} ${account.note || ""}`.toLowerCase();
-
-  if (["cash", "bank", "e_wallet"].includes(type)) return true;
-
-  // 自動模式仍保留：證券戶「現金」可列入；股票 / ETF / 基金市值不列入。
-  if (type === "asset") {
-    const hasBroker = /(證券|券商|broker|brokerage|schwab|ibkr|firstrade)/i.test(nameNote);
-    const hasCash = /(現金|cash|money market|settlement|交割)/i.test(nameNote);
-    return hasBroker && hasCash;
-  }
-
-  return false;
-}
-
-function isCashCoverageAccount(account) {
-  const mode = accountCoverageMode(account.note || "");
-  if (mode === "cash") return true;
-  if (mode === "liability" || mode === "exclude") return false;
-  return isAutoCashCoverageAccount(account);
-}
-
-function isBudgetLiabilityAccount(account) {
-  const mode = accountCoverageMode(account.note || "");
-  if (mode === "liability") return true;
-  if (mode === "cash" || mode === "exclude") return false;
-  return ["credit_card", "loan"].includes(account.type || "");
-}
-
-function budgetRealityCheckSummary() {
-  const accounts = accountBalanceRowsMerged().filter(a => a.is_active !== false);
-  const cashAccounts = accounts
-    .filter(isCashCoverageAccount)
-    .map(a => ({ ...a, coverage_amount: Math.max(0, Number(a.current_balance || 0)) }));
-
-  const liabilityAccounts = accounts
-    .filter(isBudgetLiabilityAccount)
-    .map(a => ({ ...a, liability_amount: Math.max(0, -Number(a.current_balance || 0)) }));
-
-  const excludedAccounts = accounts.filter(a => !isCashCoverageAccount(a) && !isBudgetLiabilityAccount(a));
-
-  const cashCoverage = cashAccounts.reduce((sum, a) => sum + Number(a.coverage_amount || 0), 0);
-  const liabilities = liabilityAccounts.reduce((sum, a) => sum + Number(a.liability_amount || 0), 0);
-  const availableCashNet = cashCoverage - liabilities;
-
-  const budgetRows = budgetItemSummariesForSelectedYear();
-  const budgetRemaining = budgetRows.reduce((sum, r) => sum + Math.max(0, Number(r.remaining_amount || 0)), 0);
-  const overspent = budgetRows.reduce((sum, r) => sum + Math.max(0, -Number(r.remaining_amount || 0)), 0);
-  const safetyBuffer = availableCashNet - budgetRemaining;
-
-  return {
-    cashAccounts,
-    liabilityAccounts,
-    excludedAccounts,
-    cashCoverage,
-    liabilities,
-    availableCashNet,
-    budgetRemaining,
-    overspent,
-    safetyBuffer
-  };
-}
-
-function renderBudgetRealityCheck() {
-  const s = budgetRealityCheckSummary();
-  const status = s.safetyBuffer >= 0 ? "good" : "bad";
-  const statusText = s.safetyBuffer >= 0 ? "現金覆蓋足夠" : "現金覆蓋不足";
-  const cashList = s.cashAccounts.length
-    ? `<ul class="plain-list">${s.cashAccounts.map(a => `<li>${escapeHtml(a.name)}（${escapeHtml(labelOf(a.type))}｜${escapeHtml(accountCoverageLabel(accountCoverageMode(a.note || "")))}）：${fmtMoney(a.coverage_amount)}</li>`).join("")}</ul>`
-    : `<p class="metric-sub">尚無列入覆蓋的現金類帳戶。可到「帳戶 → 編輯帳戶 → 預算驗算」手動指定。</p>`;
-
-  const liabilityList = s.liabilityAccounts.length
-    ? `<ul class="plain-list">${s.liabilityAccounts.map(a => `<li>${escapeHtml(a.name)}（${escapeHtml(labelOf(a.type))}｜${escapeHtml(accountCoverageLabel(accountCoverageMode(a.note || "")))}）：${fmtMoney(a.liability_amount)}</li>`).join("")}</ul>`
-    : `<p class="metric-sub">尚無信用卡 / 貸款扣項，或目前餘額不是負債。</p>`;
-
-  const excludedList = s.excludedAccounts.length
-    ? `<ul class="plain-list">${s.excludedAccounts.slice(0, 8).map(a => `<li>${escapeHtml(a.name)}（${escapeHtml(labelOf(a.type))}｜${escapeHtml(accountCoverageLabel(accountCoverageMode(a.note || "")))}）：未列入</li>`).join("")}${s.excludedAccounts.length > 8 ? `<li>其餘 ${s.excludedAccounts.length - 8} 個帳戶未列入</li>` : ""}</ul>`
-    : `<p class="metric-sub">沒有被排除的帳戶。</p>`;
-
-  return `
-    <div class="card budget-reality-card">
-      <div class="card-title-row">
-        <h3>預算真實性驗算</h3>
-        <span class="badge ${status}">${escapeHtml(statusText)}</span>
-      </div>
-      <p class="metric-sub">公式：你指定列入的現金類帳戶 − 你指定的負債扣項 − 預算項目剩餘總額 = 預算安全墊。可在「帳戶 → 編輯帳戶 → 預算驗算」自行決定每個帳戶是否列入。</p>
-
-      <div class="grid cols-4">
-        ${metricCard("現金類資金", fmtMoney(s.cashCoverage), "現金 / 銀行 / 電支 / 證券戶現金", "good")}
-        ${metricCard("信用卡 / 貸款扣項", fmtMoney(s.liabilities), "負債扣除", s.liabilities > 0 ? "bad" : "")}
-        ${metricCard("預算剩餘銀彈", fmtMoney(s.budgetRemaining), "各預算項目剩餘加總")}
-        ${metricCard("預算安全墊", fmtMoney(s.safetyBuffer), s.safetyBuffer >= 0 ? "現金足以覆蓋預算" : "預算超過現金支撐", status)}
-      </div>
-
-      <details class="subtle-details">
-        <summary>查看驗算明細</summary>
-        <div class="grid cols-3" style="margin-top:12px">
-          <div>
-            <h4>列入覆蓋</h4>
-            ${cashList}
-          </div>
-          <div>
-            <h4>扣項</h4>
-            ${liabilityList}
-          </div>
-          <div>
-            <h4>未列入</h4>
-            ${excludedList}
-          </div>
-        </div>
-        ${s.overspent > 0 ? `<p class="metric-sub">另有預算項目超支合計 ${fmtMoney(s.overspent)}；此數字不會拿來抵減剩餘銀彈，請另外補洞。</p>` : ""}
-      </details>
-    </div>
-  `;
-}
-
-
-function renderGlobalBudgetContributionSection() {
-  const rows = globalBudgetContributionRowsForSelectedYear();
-  return `
-    <div class="card">
-      <div class="card-title-row">
-        <h3>新增全局預算提撥</h3>
-        <span class="badge">年度母池</span>
-      </div>
-      <p class="metric-sub">全局年度預算現在以實際提撥紀錄為準。公式：目前可用預算 = 前期結轉 + 全局提撥紀錄合計。</p>
-      <form id="globalBudgetContributionForm" class="form-grid">
-        ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(today())}" required>`)}
-        ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" required placeholder="例：25000">`)}
-        <div class="field wide">
-          <label>備註</label>
-          <textarea class="input" name="note" placeholder="例：5 月稅後收入扣掉儲蓄後可支配預算"></textarea>
-        </div>
-        <div class="wide btn-row">
-          <button class="btn" type="submit">新增全局提撥</button>
-        </div>
-      </form>
-    </div>
-
-    <details class="card collapsible-card">
-      <summary class="collapsible-summary">
-        <span>全局提撥紀錄（點擊展開 / 收合）</span>
-        <span class="badge">${rows.length} 筆</span>
-      </summary>
-      <div class="collapsible-body">
-        ${renderGlobalBudgetContributionTable(rows)}
-      </div>
-    </details>
-  `;
-}
-
-function renderGlobalBudgetContributionTable(rows) {
-  if (!rows.length) return `<div class="empty">尚無全局提撥紀錄。</div>`;
-  const mobileCards = `
-    <div class="mobile-card-list">
-      ${rows.slice(0, 80).map(r => `
-        <div class="mobile-data-card">
-          <div class="mobile-data-head">
-            <div>
-              <strong>全局預算提撥</strong>
-              <span>${escapeHtml(r.contribution_date || "")}</span>
-            </div>
-            <div class="mobile-amount">${fmtMoney(r.amount)}</div>
-          </div>
-          <div class="mobile-data-meta">${r.note ? `<span>${escapeHtml(r.note)}</span>` : ""}</div>
-          <div class="mobile-card-actions">
-            <button type="button" class="btn small danger" data-delete-global-contribution="${escapeHtml(r.id)}">刪除</button>
-          </div>
-        </div>
-      `).join("")}
-    </div>`;
-
-  const tableView = `
-    <div class="table-wrap desktop-table">
-      <table>
-        <thead><tr><th>日期</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
-        <tbody>${rows.slice(0, 120).map(r => `
-          <tr>
-            <td>${escapeHtml(r.contribution_date || "")}</td>
-            <td class="mono good">${fmtMoney(r.amount)}</td>
-            <td>${escapeHtml(r.note || "")}</td>
-            <td class="actions">
-              <button type="button" class="btn small danger" data-delete-global-contribution="${escapeHtml(r.id)}">刪除</button>
-            </td>
-          </tr>`).join("")}</tbody>
-      </table>
-    </div>`;
-  return `${mobileCards}${tableView}`;
-}
-
-async function saveGlobalBudgetContribution(form) {
-  const d = readForm(form);
-  if (!d.contribution_date) throw new Error("請選擇提撥日期");
-  if (!Number(d.amount)) throw new Error("請輸入提撥金額");
-
-  const rows = globalBudgetContributionRowsForSelectedYear();
-  rows.push({
-    id: makeClientId("global_budget_contribution"),
-    contribution_date: d.contribution_date,
-    amount: numberOrZero(d.amount),
-    note: d.note || ""
-  });
-
-  return await updateSelectedYearGlobalContributions(rows);
-}
-
-async function deleteGlobalBudgetContribution(id) {
-  const rows = globalBudgetContributionRowsForSelectedYear();
-  const nextRows = rows.filter(r => r.id !== id);
-  if (nextRows.length === rows.length) throw new Error("找不到這筆全局提撥紀錄。");
-  return await updateSelectedYearGlobalContributions(nextRows);
-}
-
-async function ensureBudgetYearForNumber(yearNumber) {
-  let row = state.data.years.find(y => Number(y.budget_year) === Number(yearNumber));
-  if (row) return row;
-
-  const currentYear = state.data.years.find(y => y.id === state.selectedYearId) || {};
-  row = await upsert("years", {
-    budget_year: Number(yearNumber),
-    name: `${yearNumber} 年度預算`,
-    budget_mode: currentYear.budget_mode || "annual_total",
-    monthly_budget: Number(currentYear.monthly_budget || 0),
-    budget_start_mode: "record_start",
-    annual_budget: Number(currentYear.annual_budget || 0),
-    carryover_from_previous: 0,
-    note: "由年度結轉型預算項目自動建立"
-  }, { expect: { budget_year: Number(yearNumber) } });
-
-  state.data.years.push(row);
-  return row;
-}
-
-async function getOrCreateNextBudgetItem(currentItem, nextYear) {
-  const existing = (state.data.budgetItems || []).find(i =>
-    i.year_id === nextYear.id
-    && i.name === currentItem.name
-    && i.item_type === currentItem.item_type
-  );
-  if (existing) return existing;
-
-  const payload = {
-    year_id: nextYear.id,
-    category_id: currentItem.category_id || null,
-    name: currentItem.name,
-    item_type: currentItem.item_type || "expense",
-    planned_amount: Number(currentItem.planned_amount || 0),
-    period_type: "annual",
-    rollover_mode: "carryover",
-    sort_order: Number(currentItem.sort_order || 0),
-    is_active: currentItem.is_active !== false,
-    note: currentItem.note || "由年度結轉自動建立"
-  };
-
-  const row = await upsert("budget_items", payload, { expect: { name: payload.name, year_id: payload.year_id } });
-  state.data.budgetItems.push(row);
-  return row;
-}
-
-async function upsertRolloverContribution(nextItem, amount, fromYear) {
-  const contributionDate = `${Number(fromYear) + 1}-01-01`;
-  const marker = `${fromYear} 年度結轉`;
-  const existing = (state.data.budgetContributions || []).find(c =>
-    c.budget_item_id === nextItem.id
-    && c.contribution_date === contributionDate
-    && String(c.note || "").includes(marker)
-  );
-
-  const payload = {
-    id: existing?.id || undefined,
-    budget_item_id: nextItem.id,
-    contribution_date: contributionDate,
-    amount: Math.max(0, Math.round(Number(amount || 0))),
-    note: marker
-  };
-
-  const row = await upsert("budget_contributions", payload, { expect: { budget_item_id: nextItem.id, amount: payload.amount } });
-
-  if (existing) {
-    state.data.budgetContributions = state.data.budgetContributions.map(c => c.id === existing.id ? row : c);
-  } else {
-    state.data.budgetContributions.push(row);
-  }
-
-  return row;
-}
-
-async function rolloverAnnualBudgetItemsToNextYear() {
-  showAlert("正在檢查年度結轉型項目…", "warn");
-  const rows = annualRolloverRows();
-  const diag = annualRolloverDiagnostics();
-
-  if (!rows.length) {
-    const msg = [
-      "沒有可結轉的年度結轉型預算項目。",
-      "",
-      "可結轉條件：",
-      "1. 期間 = 每年",
-      "2. 結轉模式 = 餘額結轉",
-      "3. 今年剩餘額度 > 0",
-      "",
-      `目前：年度結轉型 ${diag.annualCarry} 項，其中剩餘 > 0 的有 ${diag.eligible} 項。`,
-      diag.notAnnualCarryNames.length ? `非年度結轉型範例：${diag.notAnnualCarryNames.join("、")}` : ""
-    ].filter(Boolean).join("\n");
-
-    await confirmAction("不能結轉", msg);
-    showAlert("沒有可結轉項目：請先把出國 / Live Music 等項目設成「每年 + 餘額結轉」，且今年剩餘要大於 0。", "warn", { sticky: true });
-    return;
-  }
-
-  const nextYearNumber = Number(state.selectedBudgetYear) + 1;
-  const summary = rows.map(r => `${r.name}：${fmtMoney(r.year_remaining_amount ?? r.remaining_amount)}`).join("\n");
-  const ok = await confirmAction(
-    "年度結轉型 Envelope",
-    `確定要把以下項目的今年剩餘額度結轉到 ${nextYearNumber} 年？\n\n${summary}\n\n這會在下一年建立同名預算項目，並新增/更新一筆「${state.selectedBudgetYear} 年度結轉」提撥。下一年的實際花費會自然從 0 開始。`
-  );
-  if (!ok) {
-    showAlert("已取消年度結轉。", "warn");
-    return;
-  }
-
-  const nextYear = await ensureBudgetYearForNumber(nextYearNumber);
-  let count = 0;
-
-  for (const row of rows) {
-    const sourceItem = state.data.budgetItems.find(i => i.id === row.budget_item_id);
-    if (!sourceItem) continue;
-    const nextItem = await getOrCreateNextBudgetItem(sourceItem, nextYear);
-    await upsertRolloverContribution(nextItem, row.year_remaining_amount ?? row.remaining_amount, state.selectedBudgetYear);
-    count += 1;
-  }
-
-  await loadAll();
-
-  const refreshedNextYear = state.data.years.find(y => Number(y.budget_year) === nextYearNumber) || nextYear;
-  if (refreshedNextYear?.id) {
-    state.selectedYearId = refreshedNextYear.id;
-    state.selectedBudgetYear = refreshedNextYear.budget_year;
-  }
-
-  render();
-  showAlert(`已結轉 ${count} 個年度結轉型預算項目到 ${nextYearNumber} 年，並切換到 ${nextYearNumber} 年。`, "good", { timeout: 8000 });
-}
-
-function renderAnnualRolloverCard() {
-  const rows = annualRolloverRows();
-  const diag = annualRolloverDiagnostics();
-  return `
-    <div class="month-close-box annual-rollover-box">
-      <div>
-        <h4>年度結轉型 Envelope</h4>
-        <p class="metric-sub">不用等到下一年。只要目前選的是 ${state.selectedBudgetYear}，按下後就會建立 / 更新 ${Number(state.selectedBudgetYear) + 1} 年的同名預算項目。可結轉條件：期間 = 每年、結轉模式 = 餘額結轉、今年剩餘 > 0。</p>
-        <p class="metric-sub">目前符合條件：${diag.eligible} 項；年度結轉型總數：${diag.annualCarry} 項。</p>
-        ${rows.length ? `<ul class="plain-list">${rows.slice(0, 8).map(r => `<li>${escapeHtml(r.name)}：今年剩餘 ${fmtMoney(r.year_remaining_amount ?? r.remaining_amount)}</li>`).join("")}</ul>` : `<p class="metric-sub warn-text">目前沒有可結轉項目。請先把出國 / Live Music / 單口喜劇 / 高端餐飲設成「每年 + 餘額結轉」，且今年剩餘要大於 0。</p>`}
-      </div>
-      <div class="btn-row">
-        <button class="btn secondary" type="button" id="rolloverAnnualItemsBtn">結轉年度型項目到下一年</button>
-      </div>
-    </div>
-  `;
-}
-
-function renderMonthCloseAdvisor() {
-  const rows = budgetItemSummariesForSelectedYear();
-  const overspent = rows.filter(r => Number(r.remaining_amount || 0) < 0).sort((a, b) => Number(a.remaining_amount) - Number(b.remaining_amount));
-  const surplus = rows.filter(r => Number(r.remaining_amount || 0) > 0).sort((a, b) => Number(b.remaining_amount) - Number(a.remaining_amount)).slice(0, 6);
-  const fixed = transactionsForSelectedYear()
-    .filter(t => t.status !== "cancelled" && t.type === "expense" && t.cashflow_nature === "fixed")
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-  const variable = transactionsForSelectedYear()
-    .filter(t => t.status !== "cancelled" && t.type === "expense" && t.cashflow_nature === "variable")
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-  const oneTime = transactionsForSelectedYear()
-    .filter(t => t.status !== "cancelled" && t.type === "expense" && t.cashflow_nature === "one_time")
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-  return `
-    <div class="card">
-      <div class="card-title-row">
-        <h3>月底關帳檢查</h3>
-        <span class="badge">Decision</span>
-      </div>
-      <div class="grid cols-3">
-        ${metricCard("固定支出", fmtMoney(fixed), "fixed")}
-        ${metricCard("變動支出", fmtMoney(variable), "variable")}
-        ${metricCard("一次性支出", fmtMoney(oneTime), "one-time")}
-      </div>
-      <div class="grid cols-2">
-        <div>
-          <h4>需要補洞的預算</h4>
-          ${overspent.length ? `<ul class="plain-list">${overspent.map(r => `<li>${escapeHtml(r.name)}：超支 ${fmtMoney(Math.abs(r.remaining_amount))}</li>`).join("")}</ul>` : `<p class="metric-sub">目前沒有超支 envelope。</p>`}
-        </div>
-        <div>
-          <h4>可挪用的預算</h4>
-          ${surplus.length ? `<ul class="plain-list">${surplus.map(r => `<li>${escapeHtml(r.name)}：剩餘 ${fmtMoney(r.remaining_amount)}</li>`).join("")}</ul>` : `<p class="metric-sub">目前沒有明顯可挪用 envelope。</p>`}
-        </div>
-      </div>
-
-      <div class="month-close-box">
-        <div>
-          <h4>手動分配結餘</h4>
-          <p class="metric-sub">不會自動跳出、不會自動分類；你按按鈕後才會開始分配。系統會把固定型月預算的未用結餘移到指定 envelope，不會新增收入或支出。</p>
-          ${renderMonthCloseSweepSuggestions()}
-        </div>
-        <div class="btn-row">
-          <button class="btn secondary" type="button" id="runMonthCloseSweepBtn">手動分配結餘</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-
-function activeBudgetOperationMode() {
-  if (state.editing.budgetContribution) return "itemContribution";
-  if (state.editing.budgetMovement) return "movement";
-  if (state.editing.budgetItem) return "item";
-  if (state.editing.year) return "year";
-  return state.budgetOperationMode || "globalContribution";
-}
-
-function budgetOperationTab(mode, label) {
-  const active = activeBudgetOperationMode() === mode ? "active" : "";
-  return `<button class="seg-btn ${active}" type="button" data-budget-operation="${mode}">${escapeHtml(label)}</button>`;
-}
-
-function clearBudgetOperationEditing() {
-  state.editing.year = null;
-  state.editing.budgetItem = null;
-  state.editing.budgetContribution = null;
-  state.editing.budgetMovement = null;
-}
-
-function renderYearSettingsForm(editYear, current) {
-  return `
-    <form id="yearForm" class="form-grid two">
-      <input type="hidden" name="id" value="${escapeHtml(editYear?.id || "")}">
-      ${field("年度", `<input class="input" type="number" name="budget_year" min="2000" max="2100" value="${escapeHtml(editYear?.budget_year || state.selectedBudgetYear)}" required>`)}
-      ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editYear?.name || "")}" placeholder="例：2026 年度預算">`)}
-      ${field("預算模式", `<input class="input" value="提撥紀錄制" disabled><input type="hidden" name="budget_mode" value="monthly_contribution">`)}
-      ${field("年度提撥合計", `<input class="input" value="${escapeHtml(fmtMoney(current.annual_budget || 0))}" disabled><input type="hidden" name="annual_budget" value="${escapeHtml(current.annual_budget || 0)}">`)}
-      ${field("計算起點", `<input class="input" value="依全局提撥紀錄" disabled><input type="hidden" name="budget_start_mode" value="record_start">`)}
-      ${field("前期結轉", `<input class="input" type="number" step="1" name="carryover_from_previous" value="${escapeHtml(editYear?.carryover_from_previous ?? current.carryover_from_previous ?? 0)}">`)}
-      <div class="field wide">
-        <label>備註</label>
-        <textarea class="input" name="note">${escapeHtml(stripGlobalBudgetContributionsMarker(editYear?.note || ""))}</textarea>
-      </div>
-      <div class="wide btn-row">
-        <button class="btn" type="submit">儲存年度</button>
-        <button class="btn secondary" type="button" data-edit-year="${state.selectedYearId}">載入目前年度編輯</button>
-        <button class="btn secondary" type="button" id="closeYearBtn">結轉到下一年</button>
-        ${editYear ? `<button class="btn danger" type="button" data-delete="years:${editYear.id}">刪除年度</button>` : ""}
-        ${editYear ? `<button class="btn secondary" type="button" data-cancel-edit="year">取消編輯</button>` : ""}
-      </div>
-    </form>
-  `;
-}
-
-function renderBudgetItemForm(editItem) {
-  return `
-    <form id="budgetItemForm" class="form-grid two">
-      <input type="hidden" name="id" value="${escapeHtml(editItem?.id || "")}">
-      ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editItem?.name || "")}" required placeholder="例：日常餐飲">`)}
-      ${field("類型", `<select class="input" name="item_type">${selectOpts(["expense","income","saving","other"], editItem?.item_type || "expense")}</select>`)}
-      ${field("金額", `<input class="input" type="number" step="1" name="planned_amount" value="${escapeHtml(editItem?.planned_amount || "")}" required placeholder="固定預算，或參考額度">`)}
-      ${field("分類", `<select class="input" name="category_id">${categoryOptions(editItem?.item_type || "expense", editItem?.category_id || "")}</select>`)}
-      <details class="advanced-fields wide">
-        <summary>進階欄位</summary>
-        <div class="form-grid two">
-          ${field("期間", `<select class="input" name="period_type">${selectOpts(["annual","monthly","weekly","custom"], editItem?.period_type || "annual")}</select>`)}
-          ${field("結轉模式", `<select class="input" name="rollover_mode">${selectOpts(["none","carryover","overspend_to_next"], editItem?.rollover_mode || "none")}</select>`)}
-          ${field("提撥起始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(editItem?.start_date || "")}">`)}
-          ${field("提撥結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(editItem?.end_date || "")}">`)}
-          ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(editItem?.sort_order || 0)}">`)}
-          ${field("啟用", `<select class="input" name="is_active">
-            <option value="true" ${editItem?.is_active !== false ? "selected" : ""}>啟用</option>
-            <option value="false" ${editItem?.is_active === false ? "selected" : ""}>停用</option>
-          </select>`)}
-          <div class="field wide">
-            <label>備註</label>
-            <textarea class="input" name="note">${escapeHtml(editItem?.note || "")}</textarea>
-          </div>
-        </div>
-      </details>
-      <div class="wide btn-row">
-        <button class="btn" type="submit">${editItem ? "儲存修改" : "新增項目"}</button>
-        ${editItem ? `<button class="btn secondary" type="button" data-cancel-edit="budgetItem">取消編輯</button>` : ""}
-      </div>
-    </form>
-  `;
-}
-
-function renderGlobalBudgetContributionForm() {
-  return `
-    <form id="globalBudgetContributionForm" class="form-grid">
-      ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(today())}" required>`)}
-      ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" required placeholder="例：25000">`)}
-      <div class="field wide">
-        <label>備註</label>
-        <textarea class="input" name="note" placeholder="例：5 月稅後收入扣掉儲蓄後可支配預算"></textarea>
-      </div>
-      <div class="wide btn-row">
-        <button class="btn" type="submit">新增全局提撥</button>
-      </div>
-    </form>
-  `;
-}
-
-function renderBudgetContributionForm(edit) {
-  return `
-    <form id="budgetContributionForm" class="form-grid">
-      <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-      ${field("預算項目", `<select class="input" name="budget_item_id" required>${budgetContributionOptions(edit?.budget_item_id || "")}</select>`)}
-      ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(edit?.contribution_date || today())}" required>`)}
-      ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="例：20000">`)}
-      <div class="field wide">
-        <label>備註</label>
-        <textarea class="input" name="note" placeholder="例：出國基金、Live Music 加碼">${escapeHtml(edit?.note || "")}</textarea>
-      </div>
-      <div class="wide btn-row">
-        <button class="btn" type="submit">${edit ? "儲存修改" : "新增項目提撥"}</button>
-        ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetContribution">取消編輯</button>` : ""}
-      </div>
-    </form>
-  `;
-}
-
-function renderBudgetMovementForm(edit) {
-  return `
-    <form id="budgetMovementForm" class="form-grid">
-      <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-      ${field("日期", `<input class="input" type="date" name="movement_date" value="${escapeHtml(edit?.movement_date || today())}" required>`)}
-      ${field("從哪個預算扣", `<select class="input" name="from_budget_item_id" required>${budgetContributionOptions(edit?.from_budget_item_id || "")}</select>`)}
-      ${field("移到哪個預算", `<select class="input" name="to_budget_item_id" required>${budgetContributionOptions(edit?.to_budget_item_id || "")}</select>`)}
-      ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
-      <div class="field wide">
-        <label>備註</label>
-        <textarea class="input" name="note" placeholder="例：月底把日常結餘移到出國">${escapeHtml(edit?.note || "")}</textarea>
-      </div>
-      <div class="wide btn-row">
-        <button class="btn" type="submit">${edit ? "儲存修改" : "新增移轉"}</button>
-        ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetMovement">取消編輯</button>` : ""}
-      </div>
-    </form>
-  `;
-}
-
-function renderBudgetOperationsCard(editYear, editItem, current) {
-  const mode = activeBudgetOperationMode();
-  const titles = {
-    globalContribution: "新增全局預算提撥",
-    itemContribution: state.editing.budgetContribution ? "編輯項目提撥" : "新增項目提撥",
-    movement: state.editing.budgetMovement ? "編輯預算移轉" : "預算項目移轉",
-    item: editItem ? "編輯預算項目" : "新增預算項目",
-    year: "年度基本設定"
-  };
-
-  const desc = {
-    globalContribution: "增加年度母池可用預算。公式：目前可用預算 = 前期結轉 + 全局提撥紀錄合計。",
-    itemContribution: "增加某個 envelope 的額度，例如出國、Live Music、高端餐飲。",
-    movement: "把一個 envelope 的剩餘額度移到另一個 envelope，不會新增收入或支出。",
-    item: "建立或修改 envelope 本身，例如日常花費、出國、Live Music。",
-    year: "低頻設定：年度、名稱、前期結轉、年度刪除與結轉到下一年。"
-  };
-
-  const body = {
-    globalContribution: renderGlobalBudgetContributionForm(),
-    itemContribution: renderBudgetContributionForm(state.editing.budgetContribution),
-    movement: renderBudgetMovementForm(state.editing.budgetMovement),
-    item: renderBudgetItemForm(editItem),
-    year: renderYearSettingsForm(editYear, current)
-  }[mode] || renderGlobalBudgetContributionForm();
-
-  return `
-    <div class="card budget-operation-card">
-      <div class="card-title-row">
-        <h3>預算操作</h3>
-        <span class="badge">${escapeHtml(titles[mode] || "")}</span>
-      </div>
-      <div class="segmented budget-operation-tabs">
-        ${budgetOperationTab("globalContribution", "全局提撥")}
-        ${budgetOperationTab("itemContribution", "項目提撥")}
-        ${budgetOperationTab("movement", "預算移轉")}
-        ${budgetOperationTab("item", "預算項目")}
-        ${budgetOperationTab("year", "年度設定")}
-      </div>
-      <p class="metric-sub">${escapeHtml(desc[mode] || "")}</p>
-      ${body}
-    </div>
-  `;
-}
-
-function renderGlobalBudgetContributionRecords() {
-  const rows = globalBudgetContributionRowsForSelectedYear();
-  return `
-    <details class="card collapsible-card">
-      <summary class="collapsible-summary">
-        <span>全局提撥紀錄（點擊展開 / 收合）</span>
-        <span class="badge">${rows.length} 筆</span>
-      </summary>
-      <div class="collapsible-body">
-        ${renderGlobalBudgetContributionTable(rows)}
-      </div>
-    </details>
-  `;
-}
-
-function renderBudgetContributionRecords() {
-  const rows = enrichedBudgetContributionsForSelectedYear();
-  return `
-    <details class="card collapsible-card">
-      <summary class="collapsible-summary">
-        <span>項目提撥紀錄（點擊展開 / 收合）</span>
-        <span class="badge">${rows.length} 筆</span>
-      </summary>
-      <div class="collapsible-body">
-        ${renderBudgetContributionTable(rows)}
-      </div>
-    </details>
-  `;
-}
-
-function renderBudgetMovementRecords() {
-  const rows = enrichedBudgetMovementsForSelectedYear();
-  return `
-    <details class="card collapsible-card">
-      <summary class="collapsible-summary">
-        <span>預算移轉紀錄（點擊展開 / 收合）</span>
-        <span class="badge">${rows.length} 筆</span>
-      </summary>
-      <div class="collapsible-body">
-        ${renderBudgetMovementTable(rows)}
-      </div>
-    </details>
-  `;
 }
 
 function renderBudget() {
@@ -2885,547 +1516,135 @@ function renderBudget() {
   `;
 }
 
-function renderBudgetItemTable(rows) {
-  if (!rows.length) return `<div class="empty">尚無預算項目</div>`;
-
+function renderBudgetItemTable(items) {
+  if (!items.length) return `<div class="empty">尚無預算項目</div>`;
   const mobileCards = `
     <div class="mobile-card-list">
-      ${rows.map(i => {
-        const pct = Number(i.used_pct || 0);
-        const isMonth = i.primary_scope === "month";
-        const isScoped = i.primary_scope !== "year";
-        return `
-          <div class="mobile-data-card">
-            <div class="mobile-data-head">
-              <div>
-                <strong>${escapeHtml(i.name)}</strong>
-                <span>${escapeHtml(labelOf(i.item_type))} · ${escapeHtml(i.category_name || "未分類")} · ${escapeHtml(i.scope_label)}</span>
-              </div>
-              <div class="mobile-amount">${fmtMoney(i.current_budget_amount)}</div>
+      ${items.map(i => `
+        <div class="mobile-data-card">
+          <div class="mobile-data-head">
+            <div>
+              <strong>${escapeHtml(i.name)}</strong>
+              <span>${escapeHtml(i.category_name || "未分類")}｜${escapeHtml(labelOf(i.item_type))}</span>
             </div>
-            <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
-            <div class="mobile-data-meta">
-              <span>${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
-              <span>${escapeHtml(isMonth ? `${i.current_month}月視角` : "年度視角")}</span>
-              <span>實際 ${fmtMoney(i.actual_amount)}</span>
-              <span>${Number(i.remaining_amount || 0) >= 0 ? `剩餘 ${fmtMoney(i.remaining_amount)}` : `超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
-              <span>${fmtNumber(pct, 1)}%</span>
-              ${isScoped ? `<span>累積資訊：可用 ${fmtMoney(i.year_budget_amount)} / 實際 ${fmtMoney(i.year_actual_amount)} / 剩餘 ${fmtMoney(i.year_remaining_amount)}</span>` : ""}
-            </div>
-            <div class="mobile-card-actions">
-              <button class="btn small secondary" type="button" data-edit-budget="${i.budget_item_id}">編輯</button>
-              <button class="btn small secondary" type="button" data-close-budget="${i.budget_item_id}">結帳</button>
-              <button type="button" class="btn small danger" data-delete="budget_items:${i.budget_item_id}">刪除</button>
-            </div>
+            <div class="mobile-amount ${Number(i.remaining_amount || 0) >= 0 ? "good" : "bad"}">${fmtMoney(i.remaining_amount)}</div>
           </div>
-        `;
-      }).join("")}
-    </div>
-  `;
+          <div class="mobile-data-meta">
+            <span>可用 ${fmtMoney(i.current_budget_amount)}</span>
+            <span>實際 ${fmtMoney(i.actual_amount)}</span>
+            <span>使用率 ${fmtNumber(i.usage_pct, 1)}%</span>
+          </div>
+          <div class="progress"><span style="width:${Math.min(100, Math.max(0, i.usage_pct || 0))}%"></span></div>
+          <div class="mobile-card-actions">
+            <button type="button" class="btn small secondary" data-edit-budget="${escapeHtml(i.id)}">編輯</button>
+            <button type="button" class="btn small secondary" data-close-budget-item="${escapeHtml(i.id)}">結帳</button>
+            <button type="button" class="btn small danger" data-delete="budget_items:${escapeHtml(i.id)}">刪除</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
 
   const tableView = `
     <div class="table-wrap desktop-table">
       <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>可用</th><th>實際</th><th>剩餘</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>類型</th><th>分類</th><th>計算方式</th><th>目前可用</th><th>實際</th><th>剩餘</th><th>使用率</th><th>操作</th></tr></thead>
         <tbody>
-          ${rows.map(i => {
-            const pct = Number(i.used_pct || 0);
-            const isMonth = i.primary_scope === "month";
-        const isScoped = i.primary_scope !== "year";
-            return `
-              <tr>
-                <td>${escapeHtml(i.name)}</td>
-                <td><span class="badge">${escapeHtml(labelOf(i.item_type))}</span></td>
-                <td>${escapeHtml(i.category_name || "")}</td>
-                <td>
-                  <span class="badge">${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
-                  <div class="muted">${escapeHtml(i.funding_label)}${i.movement_net ? `｜本視角移轉淨額 ${fmtMoney(i.movement_net)}` : ""}</div>
-                </td>
-                <td><span class="badge">${escapeHtml(i.scope_label)}</span></td>
-                <td class="mono">${fmtMoney(i.current_budget_amount)}</td>
-                <td class="mono bad">${fmtMoney(i.actual_amount)}</td>
-                <td class="mono ${Number(i.remaining_amount || 0) >= 0 ? "good" : "bad"}">${fmtMoney(i.remaining_amount)}</td>
-                <td>
-                  <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
-                  <span class="muted">${fmtNumber(pct, 1)}%</span>
-                </td>
-                <td class="muted">
-                  ${isScoped ? `累積：可用 ${fmtMoney(i.year_budget_amount)}｜實際 ${fmtMoney(i.year_actual_amount)}｜剩餘 ${fmtMoney(i.year_remaining_amount)}` : "—"}
-                </td>
-                <td class="actions">
-                  <button class="btn small secondary" data-edit-budget="${i.budget_item_id}">編輯</button>
-                  <button class="btn small secondary" type="button" data-close-budget="${i.budget_item_id}">結帳</button>
-                  <button type="button" class="btn small danger" data-delete="budget_items:${i.budget_item_id}">刪除</button>
-                </td>
-              </tr>
-            `;
-          }).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  return `${mobileCards}${tableView}`;
-}
-
-function renderAccounts() {
-  const edit = state.editing.account;
-  const rows = state.data.accountBalances;
-  return `
-    <div class="card">
-      <h3>${edit ? "編輯帳戶" : "新增帳戶"}</h3>
-      <form id="accountForm" class="form-grid">
-        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-        ${field("名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required>`)}
-        ${field("類型", `<select class="input" name="type">
-          ${selectOpts(["cash","bank","e_wallet","credit_card","loan","asset","other"], edit?.type || "bank")}
-        </select>`)}
-        ${field("初始餘額", `<input class="input" type="number" step="1" name="initial_balance" value="${escapeHtml(edit?.initial_balance || 0)}">`)}
-        ${field("開帳日", `<input class="input" type="date" name="opening_date" value="${escapeHtml(edit?.opening_date || "")}">`)}
-        ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(edit?.sort_order || 0)}">`)}
-        ${field("啟用", `<select class="input" name="is_active">
-          <option value="true" ${edit?.is_active !== false ? "selected" : ""}>啟用</option>
-          <option value="false" ${edit?.is_active === false ? "selected" : ""}>停用</option>
-        </select>`)}
-        ${field("預算驗算", accountCoverageSelect(accountCoverageMode(edit?.note || "")))}
-        <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(stripAccountCoverageMarker(edit?.note || ""))}</textarea></div>
-        <div class="wide btn-row">
-          <button class="btn" type="submit">${edit ? "儲存修改" : "新增帳戶"}</button>
-          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="account">取消編輯</button>` : ""}
-        </div>
-      </form>
-    </div>
-    <div class="card">
-      <h3>帳戶列表</h3>
-      ${renderAccountTable(rows)}
-    </div>
-  `;
-}
-
-function renderAccountTable(rows) {
-  if (!rows.length) return `<div class="empty">尚無帳戶</div>`;
-  return `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>預算驗算</th><th>初始餘額</th><th>目前餘額</th><th>狀態</th><th>操作</th></tr></thead>
-        <tbody>
-          ${rows.map(a => `
+          ${items.map(i => `
             <tr>
-              <td>${escapeHtml(a.name)}</td>
-              <td><span class="badge">${escapeHtml(labelOf(a.type))}</span></td>
-              <td><span class="badge">${escapeHtml(accountCoverageLabel(accountCoverageMode(a.note || "")))}</span></td>
-              <td class="mono">${fmtMoney(a.initial_balance)}</td>
-              <td class="mono ${Number(a.current_balance || 0) >= 0 ? "good" : "bad"}">${fmtMoney(a.current_balance)}</td>
-              <td>${a.is_active ? "啟用" : "停用"}</td>
+              <td><strong>${escapeHtml(i.name)}</strong></td>
+              <td><span class="badge">${escapeHtml(labelOf(i.item_type))}</span></td>
+              <td>${escapeHtml(i.category_name || "")}</td>
+              <td><span class="badge">${["monthly","weekly"].includes(i.period_type || "annual") && i.rollover_mode === "carryover" ? "提撥型" : budgetIsAnnualRolloverMode(i) ? "年度結轉型" : "固定型"}</span><br><small>${escapeHtml(i.budget_formula)}</small></td>
+              <td class="mono">${fmtMoney(i.current_budget_amount)}</td>
+              <td class="mono bad">${fmtMoney(i.actual_amount)}</td>
+              <td class="mono ${Number(i.remaining_amount || 0) >= 0 ? "good" : "bad"}">${fmtMoney(i.remaining_amount)}</td>
+              <td><div class="mini-progress"><span style="width:${Math.min(100, Math.max(0, i.usage_pct || 0))}%"></span></div><small>${fmtNumber(i.usage_pct, 1)}%</small></td>
               <td class="actions">
-                <button class="btn small secondary" data-edit-account="${a.id}">編輯</button>
-                <button type="button" class="btn small danger" data-delete="accounts:${a.id}">刪除</button>
+                <button class="btn small secondary" data-edit-budget="${escapeHtml(i.id)}">編輯</button>
+                <button class="btn small secondary" data-close-budget-item="${escapeHtml(i.id)}">結帳</button>
+                <button class="btn small danger" data-delete="budget_items:${escapeHtml(i.id)}">刪除</button>
               </td>
             </tr>
           `).join("")}
         </tbody>
       </table>
-    </div>
-  `;
+    </div>`;
+  return `${mobileCards}${tableView}`;
 }
 
-function renderCategories() {
-  const editCat = state.editing.category;
-  const editTag = state.editing.tag;
-  return `
-    <div class="grid cols-2">
-      <div class="card">
-        <h3>${editCat ? "編輯分類" : "新增分類"}</h3>
-        <form id="categoryForm" class="form-grid two">
-          <input type="hidden" name="id" value="${escapeHtml(editCat?.id || "")}">
-          ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editCat?.name || "")}" required>`)}
-          ${field("類型", `<select class="input" name="type">${selectOpts(["income","expense","transfer"], editCat?.type || "expense")}</select>`)}
-          ${field("顏色", `<select class="input" name="color">${colorOptions(editCat?.color || "#64748b")}</select>`)}
-          ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(editCat?.sort_order || 0)}">`)}
-          <div class="wide btn-row">
-            <button class="btn" type="submit">${editCat ? "儲存分類" : "新增分類"}</button>
-            ${editCat ? `<button class="btn secondary" type="button" data-cancel-edit="category">取消編輯</button>` : ""}
-          </div>
-        </form>
-      </div>
-
-      <div class="card">
-        <h3>${editTag ? "編輯標籤" : "新增標籤"}</h3>
-        <form id="tagForm" class="form-grid two">
-          <input type="hidden" name="id" value="${escapeHtml(editTag?.id || "")}">
-          ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editTag?.name || "")}" required>`)}
-          ${field("顏色", `<select class="input" name="color">${colorOptions(editTag?.color || "#64748b")}</select>`)}
-          <div class="field wide"><label>備註</label><input class="input" name="note" value="${escapeHtml(editTag?.note || "")}"></div>
-          <div class="wide btn-row">
-            <button class="btn" type="submit">${editTag ? "儲存標籤" : "新增標籤"}</button>
-            ${editTag ? `<button class="btn secondary" type="button" data-cancel-edit="tag">取消編輯</button>` : ""}
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <div class="grid cols-2">
-      <div class="card">
-        <h3>分類列表</h3>
-        ${renderCategoryTable()}
-      </div>
-      <div class="card">
-        <h3>標籤列表</h3>
-        ${renderTagTable()}
-      </div>
-    </div>
-  `;
-}
-
-function renderCategoryTable() {
-  const rows = state.data.categories;
-  if (!rows.length) return `<div class="empty">尚無分類</div>`;
-  return `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>顏色</th><th>排序</th><th>操作</th></tr></thead>
-        <tbody>${rows.map(c => `
-          <tr>
-            <td>${escapeHtml(c.name)}</td>
-            <td><span class="badge ${escapeHtml(c.type)}">${escapeHtml(labelOf(c.type))}</span></td>
-            <td>${colorDot(c.color)}</td>
-            <td>${escapeHtml(c.sort_order || 0)}</td>
-            <td class="actions">
-              <button class="btn small secondary" data-edit-category="${c.id}">編輯</button>
-              <button type="button" class="btn small danger" data-delete="categories:${c.id}">刪除</button>
-            </td>
-          </tr>`).join("")}</tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderTagTable() {
-  const rows = state.data.tags;
-  if (!rows.length) return `<div class="empty">尚無標籤</div>`;
-  return `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>名稱</th><th>顏色</th><th>備註</th><th>操作</th></tr></thead>
-        <tbody>${rows.map(t => `
-          <tr>
-            <td><span class="badge">${escapeHtml(t.name)}</span></td>
-            <td>${colorDot(t.color)}</td>
-            <td>${escapeHtml(t.note || "")}</td>
-            <td class="actions">
-              <button class="btn small secondary" data-edit-tag="${t.id}">編輯</button>
-              <button type="button" class="btn small danger" data-delete="tags:${t.id}">刪除</button>
-            </td>
-          </tr>`).join("")}</tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderRecurring() {
-  const edit = state.editing.recurring;
-  return `
-    <div class="card">
-      <h3>${edit ? "編輯訂閱" : "新增訂閱"}</h3>
-      <p class="metric-sub">這裡只管理固定扣款支出，例如串流、雲端、健身房、手機費。它不會自動新增流水帳。</p>
-      <p class="metric-sub">目前前端版本：v12。如果你看不到 v12，代表 GitHub Pages 或瀏覽器還在用舊版。</p>
-      <form id="recurringForm" class="form-grid">
-        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-        ${field("服務名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Netflix、Spotify、iCloud、ChatGPT">`)}
-        ${field("金額", `<input class="input" type="number" step="1" min="0" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
-        ${field("付款帳戶", `<select class="input" name="account_id" required>${accountOptions(edit?.account_id || "")}</select>`)}
-        ${field("分類", `<select class="input" name="category_id">${categoryOptions("expense", edit?.category_id || "")}</select>`)}
-        ${field("預算項目", `<select class="input" name="budget_item_id">${budgetItemOptions(edit?.budget_item_id || "")}</select>`)}
-        ${field("付款週期", `<select class="input" name="frequency">${selectOpts(["monthly","yearly","weekly","quarterly","daily","custom"], edit?.frequency || "monthly")}</select>`)}
-        ${field("每幾期扣一次", `<input class="input" type="number" min="1" name="interval_count" value="${escapeHtml(edit?.interval_count || 1)}">`)}
-        ${field("開始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(edit?.start_date || today())}" required>`)}
-        ${field("下次扣款日", `<input class="input" type="date" name="next_due_date" value="${escapeHtml(edit?.next_due_date || today())}" required>`)}
-        ${field("結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(edit?.end_date || "")}">`)}
-        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="例：信用卡、銀行扣款、電子支付">`)}
-        ${field("服務商", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="例：Netflix、Apple、Google、OpenAI">`)}
-        ${field("狀態", `<select class="input" name="is_active">
-          <option value="true" ${edit?.is_active !== false ? "selected" : ""}>使用中</option>
-          <option value="false" ${edit?.is_active === false ? "selected" : ""}>已取消 / 停用</option>
-        </select>`)}
-        <div class="field wide"><label>備註 / 取消方式</label><textarea class="input" name="note" placeholder="例：取消入口、方案內容、是否值得續訂">${escapeHtml(edit?.note || "")}</textarea></div>
-        <div class="wide btn-row">
-          <button class="btn" type="submit">${edit ? "儲存訂閱" : "新增訂閱"}</button>
-          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="recurring">取消編輯</button>` : ""}
-        </div>
-      </form>
-    </div>
-    <div class="card">
-      <div class="card-title-row">
-        <h3>訂閱列表</h3>
-        <button class="btn small secondary" id="refreshRecurringBtn" type="button">重新讀取訂閱</button>
-      </div>
-      ${renderRecurringTable()}
-    </div>
-  `;
-}
-
-function renderRecurringTable() {
-  const rows = state.data.recurring;
-  if (!rows.length) return `<div class="empty">尚無訂閱</div>`;
-  const accountMap = Object.fromEntries(state.data.accounts.map(a => [a.id, a.name]));
-  const catMap = Object.fromEntries(state.data.categories.map(c => [c.id, c.name]));
-  return `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>服務名稱</th><th>類型</th><th>金額</th><th>付款帳戶</th><th>分類</th><th>付款週期</th><th>下次扣款日</th><th>狀態</th><th>操作</th></tr></thead>
-        <tbody>${rows.map(r => `
-          <tr>
-            <td>${escapeHtml(r.name)}</td>
-            <td>${typeBadge(r.type)}</td>
-            <td class="mono">${fmtMoney(r.amount)}</td>
-            <td>${escapeHtml(accountMap[r.account_id] || "")}</td>
-            <td>${escapeHtml(catMap[r.category_id] || "")}</td>
-            <td>${escapeHtml(labelOf(r.frequency))} / ${escapeHtml(r.interval_count || 1)}</td>
-            <td>${escapeHtml(r.next_due_date || "")}</td>
-            <td>${r.is_active ? "使用中" : "已取消"}</td>
-            <td class="actions">
-              <button class="btn small secondary" data-edit-recurring="${r.id}">編輯</button>
-              <button type="button" class="btn small danger" data-delete="recurring_transactions:${r.id}">刪除</button>
-            </td>
-          </tr>`).join("")}</tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderCreditLoans() {
-  const editCard = state.editing.creditCard;
-  const editLoan = state.editing.loan;
-  return `
-    <div class="grid cols-2">
-      <div class="card">
-        <h3>${editCard ? "編輯信用卡" : "新增信用卡"}</h3>
-        <form id="creditCardForm" class="form-grid two">
-          <input type="hidden" name="id" value="${escapeHtml(editCard?.id || "")}">
-          ${field("對應帳戶", `<select class="input" name="account_id" required>${creditCardAccountOptions(editCard?.account_id || "")}</select>`)}
-          ${field("卡名", `<input class="input" name="card_name" value="${escapeHtml(editCard?.card_name || "")}" required>`)}
-          ${field("發卡行", `<input class="input" name="issuer" value="${escapeHtml(editCard?.issuer || "")}">`)}
-          ${field("信用額度", `<input class="input" type="number" step="1" name="credit_limit" value="${escapeHtml(editCard?.credit_limit || 0)}">`)}
-          ${field("結帳日", `<input class="input" type="number" min="1" max="31" name="statement_day" value="${escapeHtml(editCard?.statement_day || "")}">`)}
-          ${field("繳款日", `<input class="input" type="number" min="1" max="31" name="payment_due_day" value="${escapeHtml(editCard?.payment_due_day || "")}">`)}
-          <div class="wide btn-row">
-            <button class="btn" type="submit">${editCard ? "儲存信用卡" : "新增信用卡"}</button>
-            ${editCard ? `<button class="btn secondary" type="button" data-cancel-edit="creditCard">取消編輯</button>` : ""}
-          </div>
-        </form>
-      </div>
-
-      <div class="card">
-        <h3>${editLoan ? "編輯貸款 / 債務" : "新增貸款 / 債務"}</h3>
-        <form id="loanForm" class="form-grid two">
-          <input type="hidden" name="id" value="${escapeHtml(editLoan?.id || "")}">
-          ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editLoan?.name || "")}" required>`)}
-          ${field("類型", `<select class="input" name="loan_type">${selectOpts(["student_loan","personal_loan","mortgage","car_loan","credit_card_debt","installment","other"], editLoan?.loan_type || "other")}</select>`)}
-          ${field("本金", `<input class="input" type="number" step="1" name="principal_amount" value="${escapeHtml(editLoan?.principal_amount || 0)}">`)}
-          ${field("剩餘本金", `<input class="input" type="number" step="1" name="remaining_principal" value="${escapeHtml(editLoan?.remaining_principal || 0)}">`)}
-          ${field("年利率 %", `<input class="input" type="number" step="0.0001" name="annual_interest_rate" value="${escapeHtml(editLoan?.annual_interest_rate || 0)}">`)}
-          ${field("每月還款", `<input class="input" type="number" step="1" name="monthly_payment" value="${escapeHtml(editLoan?.monthly_payment || 0)}">`)}
-          ${field("狀態", `<select class="input" name="status">${selectOpts(["active","paid_off","paused","cancelled"], editLoan?.status || "active")}</select>`)}
-          ${field("債權人", `<input class="input" name="creditor" value="${escapeHtml(editLoan?.creditor || "")}">`)}
-          <div class="wide btn-row">
-            <button class="btn" type="submit">${editLoan ? "儲存貸款" : "新增貸款"}</button>
-            ${editLoan ? `<button class="btn secondary" type="button" data-cancel-edit="loan">取消編輯</button>` : ""}
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <div class="grid cols-2">
-      <div class="card"><h3>信用卡</h3>${renderCreditCardTable()}</div>
-      <div class="card"><h3>貸款 / 債務</h3>${renderLoanTable()}</div>
-    </div>
-  `;
-}
-
-function renderCreditCardTable() {
-  const rows = state.data.creditCards;
-  if (!rows.length) return `<div class="empty">尚無信用卡</div>`;
-  const accountMap = Object.fromEntries(state.data.accounts.map(a => [a.id, a.name]));
-  return `
-    <div class="table-wrap"><table>
-      <thead><tr><th>卡名</th><th>帳戶</th><th>額度</th><th>結帳 / 繳款</th><th>回饋</th><th>操作</th></tr></thead>
-      <tbody>${rows.map(c => `
-        <tr>
-          <td>${escapeHtml(c.card_name)}</td>
-          <td>${escapeHtml(accountMap[c.account_id] || "")}</td>
-          <td class="mono">${fmtMoney(c.credit_limit)}</td>
-          <td>${escapeHtml(c.statement_day || "-")} / ${escapeHtml(c.payment_due_day || "-")}</td>
-          <td class="actions">
-            <button class="btn small secondary" data-edit-card="${c.id}">編輯</button>
-            <button type="button" class="btn small danger" data-delete="credit_cards:${c.id}">刪除</button>
-          </td>
-        </tr>`).join("")}</tbody>
-    </table></div>
-  `;
-}
-
-function renderLoanTable() {
-  const rows = state.data.loans;
-  if (!rows.length) return `<div class="empty">尚無貸款</div>`;
-  return `
-    <div class="table-wrap"><table>
-      <thead><tr><th>名稱</th><th>類型</th><th>剩餘本金</th><th>年利率</th><th>每月還款</th><th>狀態</th><th>操作</th></tr></thead>
-      <tbody>${rows.map(l => `
-        <tr>
-          <td>${escapeHtml(l.name)}</td>
-          <td><span class="badge">${escapeHtml(labelOf(l.loan_type))}</span></td>
-          <td class="mono bad">${fmtMoney(l.remaining_principal)}</td>
-          <td>${fmtNumber(l.annual_interest_rate, 2)}%</td>
-          <td class="mono">${fmtMoney(l.monthly_payment)}</td>
-          <td>${escapeHtml(labelOf(l.status))}</td>
-          <td class="actions">
-            <button class="btn small secondary" data-edit-loan="${l.id}">編輯</button>
-            <button type="button" class="btn small danger" data-delete="loans:${l.id}">刪除</button>
-          </td>
-        </tr>`).join("")}</tbody>
-    </table></div>
-  `;
-}
-
-function renderGoals() {
-  const edit = state.editing.goal;
-  return `
-    <div class="card">
-      <h3>${edit ? "編輯目標" : "新增目標"}</h3>
-      <form id="goalForm" class="form-grid">
-        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-        ${field("名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required>`)}
-        ${field("類型", `<select class="input" name="goal_type">${selectOpts(["saving","debt_reduction","travel","emergency_fund","purchase","other"], edit?.goal_type || "saving")}</select>`)}
-        ${field("目標金額", `<input class="input" type="number" step="1" name="target_amount" value="${escapeHtml(edit?.target_amount || 0)}">`)}
-        ${field("目前金額", `<input class="input" type="number" step="1" name="current_amount" value="${escapeHtml(edit?.current_amount || 0)}">`)}
-        ${field("開始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(edit?.start_date || "")}">`)}
-        ${field("目標日", `<input class="input" type="date" name="target_date" value="${escapeHtml(edit?.target_date || "")}">`)}
-        ${field("優先級 1-5", `<input class="input" type="number" min="1" max="5" name="priority" value="${escapeHtml(edit?.priority || 3)}">`)}
-        ${field("狀態", `<select class="input" name="status">${selectOpts(["active","paused","completed","cancelled"], edit?.status || "active")}</select>`)}
-        <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(edit?.note || "")}</textarea></div>
-        <div class="wide btn-row">
-          <button class="btn" type="submit">${edit ? "儲存目標" : "新增目標"}</button>
-          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="goal">取消編輯</button>` : ""}
-        </div>
-      </form>
-    </div>
-    <div class="card">
-      <h3>目標列表</h3>
-      ${renderGoalCards()}
-    </div>
-  `;
-}
-
-function renderGoalCards() {
-  const rows = state.data.goals;
-  if (!rows.length) return `<div class="empty">尚無目標</div>`;
+function renderBudgetAllocationCards() {
+  const current = getCurrentYearSummary();
+  const items = budgetItemSummariesForSelectedYear();
+  const allocated = items.reduce((sum, i) => sum + Number(i.current_budget_amount || 0), 0);
+  const unallocated = Number(current.available_budget || 0) - allocated;
   return `
     <div class="grid cols-3">
-      ${rows.map(g => {
-        const pct = Number(g.target_amount || 0) ? Math.min(100, Number(g.current_amount || 0) / Number(g.target_amount || 0) * 100) : 0;
-        return `
-          <div class="card">
-            <div class="card-title-row">
-              <h3>${escapeHtml(g.name)}</h3>
-              <span class="badge">${escapeHtml(labelOf(g.status))}</span>
-            </div>
-            <div class="metric-value">${fmtNumber(pct, 1)}%</div>
-            <div class="progress"><span style="width:${pct}%"></span></div>
-            <p class="metric-sub">${fmtMoney(g.current_amount)} / ${fmtMoney(g.target_amount)} · ${escapeHtml(labelOf(g.goal_type))}</p>
-            <div class="btn-row">
-              <button class="btn small secondary" data-edit-goal="${g.id}">編輯</button>
-              <button type="button" class="btn small danger" data-delete="goals:${g.id}">刪除</button>
-            </div>
-          </div>
-        `;
-      }).join("")}
+      ${metricCard("項目已分配", fmtMoney(allocated), "各項目目前可用額度加總")}
+      ${metricCard(unallocated >= 0 ? "尚未分配" : "超額分配", fmtMoney(unallocated), unallocated >= 0 ? "母池尚有空間" : "項目額度已超過母池", unallocated >= 0 ? "good" : "bad")}
+      ${metricCard("年度結轉型項目", fmtNumber(items.filter(budgetIsAnnualRolloverMode).length, 0) + " 項", "每年 + 餘額結轉")}
     </div>
   `;
 }
 
+function budgetRealityAccounts() {
+  const rows = state.data.accountBalances.filter(a => a.is_active !== false);
+  const cashTypes = new Set(["cash", "bank", "e_wallet", "asset"]);
+  const liabilityTypes = new Set(["credit_card", "loan"]);
+  let cash = 0;
+  let liabilities = 0;
+  const details = [];
 
-function renderCashflowStatementCard() {
-  const rows = cashflowStatementRows();
-  return `
-    <div class="card">
-      <div class="card-title-row"><h3>年度現金流量表</h3><span class="badge">Direct Method</span></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>區塊</th><th>項目</th><th>金額</th><th>比例</th><th>備註</th></tr></thead>
-          <tbody>${rows.map(r => `<tr><td>${escapeHtml(r.section)}</td><td>${escapeHtml(r.item)}</td><td class="mono">${typeof r.amount === "number" ? fmtMoney(r.amount) : escapeHtml(r.amount)}</td><td>${escapeHtml(r.ratio)}</td><td>${escapeHtml(r.note)}</td></tr>`).join("")}</tbody>
-        </table>
-      </div>
-    </div>
-  `;
-}
+  rows.forEach(a => {
+    const balance = Number(a.current_balance || 0);
+    const mode = accountCoverageMode(a.note || "");
+    let role = "exclude";
 
-function renderBudgetVarianceCard() {
-  const rows = getBudgetCompareRows(999).sort((a, b) => Math.abs(b.remaining) - Math.abs(a.remaining)).slice(0, 12);
-  if (!rows.length) return `<div class="card"><h3>預算差異分析</h3><div class="empty">尚無預算資料。</div></div>`;
-  return `
-    <div class="card">
-      <div class="card-title-row"><h3>預算差異分析</h3><span class="badge">Variance</span></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>項目</th><th>目前可用</th><th>實際</th><th>差異</th></tr></thead>
-          <tbody>${rows.map(r => `<tr><td>${escapeHtml(r.name)}</td><td class="mono">${fmtMoney(r.planned)}</td><td class="mono bad">${fmtMoney(r.actual)}</td><td class="mono ${r.remaining >= 0 ? "good" : "bad"}">${fmtMoney(r.remaining)}</td></tr>`).join("")}</tbody>
-        </table>
-      </div>
-    </div>
-  `;
-}
+    if (mode === "cash") role = "cash";
+    else if (mode === "liability") role = "liability";
+    else if (mode === "exclude") role = "exclude";
+    else if (cashTypes.has(a.type)) role = "cash";
+    else if (liabilityTypes.has(a.type)) role = "liability";
 
-function renderBurnRateCard() {
-  const nowMonth = new Date().getMonth() + 1;
-  const rows = budgetItemSummariesForSelectedYear()
-    .filter(r => Number(r.current_budget_amount || 0) > 0)
-    .map(r => {
-      const burn = Number(r.actual_amount || 0) / Math.max(1, nowMonth);
-      const runway = burn > 0 ? Number(r.remaining_amount || 0) / burn : null;
-      return { ...r, burn, runway };
-    })
-    .sort((a, b) => Number(a.runway ?? 9999) - Number(b.runway ?? 9999))
-    .slice(0, 8);
-  return `
-    <div class="card">
-      <div class="card-title-row"><h3>預算 Burn Rate</h3><span class="badge">Forecast</span></div>
-      ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>項目</th><th>平均月花費</th><th>剩餘</th><th>估計還能撐</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.name)}</td><td class="mono">${fmtMoney(r.burn)}</td><td class="mono">${fmtMoney(r.remaining_amount)}</td><td>${r.runway === null ? "N/A" : `${fmtNumber(r.runway, 1)} 個月`}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">尚無資料。</div>`}
-    </div>
-  `;
-}
-
-function renderLongTermTrendCard() {
-  const all = allTransactionsEnriched().filter(t => t.status !== "cancelled");
-  const grouped = new Map();
-  all.forEach(t => {
-    const key = `${t.tx_year}-${String(t.tx_month).padStart(2, "0")}`;
-    if (!grouped.has(key)) grouped.set(key, { month: key, income: 0, expense: 0, net: 0 });
-    const row = grouped.get(key);
-    if (t.type === "income") row.income += Number(t.amount || 0);
-    if (t.type === "expense") row.expense += Number(t.amount || 0);
-    if (t.type === "refund") row.expense -= Number(t.amount || 0);
-    row.net = row.income - row.expense;
+    if (role === "cash") cash += balance;
+    if (role === "liability") liabilities += Math.abs(Math.min(balance, 0) || balance);
+    details.push({ ...a, role, balance });
   });
-  const rows = Array.from(grouped.values()).sort((a, b) => a.month.localeCompare(b.month)).slice(-24);
+
+  return { cash, liabilities, details };
+}
+
+function renderBudgetRealityCheck() {
+  const account = budgetRealityAccounts();
+  const budgetRemaining = budgetItemSummariesForSelectedYear().reduce((sum, i) => sum + Math.max(0, Number(i.remaining_amount || 0)), 0);
+  const buffer = account.cash - account.liabilities - budgetRemaining;
+  const ok = buffer >= 0;
   return `
-    <div class="card">
-      <div class="card-title-row"><h3>長期趨勢</h3><span class="badge">近 24 個月</span></div>
-      ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>月份</th><th>收入</th><th>淨支出</th><th>淨現金流</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.month)}</td><td class="mono good">${fmtMoney(r.income)}</td><td class="mono bad">${fmtMoney(r.expense)}</td><td class="mono ${r.net >= 0 ? "good" : "bad"}">${fmtMoney(r.net)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">尚無跨月資料。</div>`}
+    <div class="card reality-card ${ok ? "ok" : "danger"}">
+      <div class="card-title-row">
+        <h3>預算真實性驗算</h3>
+        <span class="badge ${ok ? "good" : "bad"}">${ok ? "現金覆蓋足夠" : "預算缺口"}</span>
+      </div>
+      <p class="metric-sub">公式：你指定列入的現金類帳戶 − 你指定的負債扣項 − 預算項目剩餘總額 = 預算安全墊。可在「帳戶 → 編輯帳戶 → 預算驗算」自行決定每個帳戶是否列入。</p>
+      <div class="grid cols-4">
+        ${metricCard("現金類資金", fmtMoney(account.cash), "現金 / 銀行 / 電支 / 證券戶現金", "good")}
+        ${metricCard("信用卡 / 貸款扣項", fmtMoney(account.liabilities), "負債扣除", account.liabilities ? "bad" : "")}
+        ${metricCard("預算剩餘銀彈", fmtMoney(budgetRemaining), "各預算項目剩餘加總")}
+        ${metricCard("預算安全墊", fmtMoney(buffer), ok ? "現金足以覆蓋預算" : "現金不足以覆蓋預算", ok ? "good" : "bad")}
+      </div>
+      <details>
+        <summary>查看驗算明細</summary>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>帳戶</th><th>類型</th><th>餘額</th><th>預算驗算</th></tr></thead>
+            <tbody>${account.details.map(a => `
+              <tr><td>${escapeHtml(a.name)}</td><td>${escapeHtml(labelOf(a.type))}</td><td class="mono">${fmtMoney(a.balance)}</td><td>${escapeHtml(accountCoverageLabel(accountCoverageMode(a.note || "")))}</td></tr>
+            `).join("")}</tbody>
+          </table>
+        </div>
+      </details>
     </div>
   `;
 }
-
-function renderDecisionReports() {
-  return `
-    ${renderCashflowStatementCard()}
-    <div class="grid cols-2">
-      ${renderBudgetVarianceCard()}
-      ${renderBurnRateCard()}
-    </div>
-    ${renderLongTermTrendCard()}
-  `;
-}
-
 
 function reportTable(headers, rows, options = {}) {
   if (!rows.length) return `<div class="empty">${escapeHtml(options.empty || "尚無資料")}</div>`;
@@ -3764,7 +1983,6 @@ function renderAddedStatementReports() {
   `;
 }
 
-
 function renderAdditionalReportCharts() {
   return `
     <div class="grid cols-2">
@@ -3797,7 +2015,6 @@ function renderAdditionalReportCharts() {
     </div>
   `;
 }
-
 
 function reportModeTab(group, mode, label) {
   const active = state[group] === mode ? "active" : "";
@@ -4133,8 +2350,6 @@ function renderReports() {
   `;
 }
 
-
-
 function expenseRowsForSelectedYear() {
   return transactionsForSelectedYear().filter(t => t.status !== "cancelled" && ["expense", "refund"].includes(t.type));
 }
@@ -4315,522 +2530,111 @@ function renderParetoSummary() {
 function getFinancialWrappedData() {
   const txRows = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
   const expenseRows = txRows.filter(t => t.type === "expense");
-  const netExpense = netExpenseForRows(txRows);
-  const income = txRows.reduce((sum, t) => sum + (t.type === "income" ? Number(t.amount || 0) : 0), 0);
-  const savingsRate = income > 0 ? (income - netExpense) / income * 100 : null;
-
-  const byDay = new Map();
-  expenseRows.forEach(t => byDay.set(t.transaction_date, Number(byDay.get(t.transaction_date) || 0) + Number(t.amount || 0)));
-  const topDay = Array.from(byDay.entries()).sort((a, b) => b[1] - a[1])[0];
-
-  const merchantCount = new Map();
-  const merchantSpend = new Map();
-  expenseRows.forEach(t => {
-    const name = t.merchant || "未填商家";
-    merchantCount.set(name, Number(merchantCount.get(name) || 0) + 1);
-    merchantSpend.set(name, Number(merchantSpend.get(name) || 0) + Number(t.amount || 0));
-  });
-  const topMerchant = Array.from(merchantCount.entries()).sort((a, b) => b[1] - a[1])[0];
-  const topMerchantSpend = topMerchant ? merchantSpend.get(topMerchant[0]) : 0;
-
-  const mostExpensiveTx = expenseRows.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0))[0];
-  const luxuryTotal = expenseRows
-    .filter(t => t.necessity_level === "luxury")
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-  const categoryRows = getCategoryNetExpenseRows(999);
-  const topCategory = categoryRows[0];
-
-  const goalTarget = state.data.goals.reduce((sum, g) => sum + Number(g.target_amount || 0), 0);
-  const goalCurrent = state.data.goals.reduce((sum, g) => sum + Number(g.current_amount || 0), 0);
-  const goalPct = goalTarget > 0 ? goalCurrent / goalTarget * 100 : null;
-
-  return {
-    income,
-    netExpense,
-    savingsRate,
-    topDay,
-    topMerchant,
-    topMerchantSpend,
-    mostExpensiveTx,
-    luxuryTotal,
-    topCategory,
-    goalPct
-  };
-}
-
-function renderWrappedTile(label, value, sub = "") {
-  return `
-    <div class="wrapped-tile">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value)}</strong>
-      ${sub ? `<em>${escapeHtml(sub)}</em>` : ""}
-    </div>
-  `;
+  const netExpense = netExpenseForRows(txRows.filter(t => ["expense", "refund"].includes(t.type)));
+  const income = txRows.filter(t => t.type === "income").reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const saving = income - netExpense;
+  const topCategory = getCategoryNetExpenseRows(1)[0];
+  const topMerchant = getMerchantRows(1)[0];
+  const biggestExpense = [...expenseRows].sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0))[0];
+  const monthly = getMonthlyAnalyticsRows();
+  const bestMonth = [...monthly].filter(m => m.income || m.expense).sort((a, b) => Number(b.saving || 0) - Number(a.saving || 0))[0];
+  const worstMonth = [...monthly].filter(m => m.income || m.expense).sort((a, b) => Number(a.saving || 0) - Number(b.saving || 0))[0];
+  return { income, netExpense, saving, topCategory, topMerchant, biggestExpense, bestMonth, worstMonth, txCount: txRows.length };
 }
 
 function renderFinancialWrapped() {
-  const data = getFinancialWrappedData();
-  if (!transactionsForSelectedYear().length) return `<div class="empty">尚無年度資料。開始記帳後，這裡會產生年度總結。</div>`;
-
+  const w = getFinancialWrappedData();
   return `
-    <div class="wrapped-hero">
-      <div>
-        <span>你的 ${state.selectedBudgetYear} 財務回顧</span>
-        <strong>${fmtMoney(data.netExpense)}</strong>
-        <em>年度淨支出</em>
-      </div>
-    </div>
     <div class="wrapped-grid">
-      ${renderWrappedTile("儲蓄率", data.savingsRate === null ? "N/A" : `${fmtNumber(data.savingsRate, 1)}%`, "收入扣除淨支出後")}
-      ${renderWrappedTile("最高支出日", data.topDay ? data.topDay[0] : "N/A", data.topDay ? fmtMoney(data.topDay[1]) : "")}
-      ${renderWrappedTile("最常消費商家", data.topMerchant ? data.topMerchant[0] : "N/A", data.topMerchant ? `${data.topMerchant[1]} 次｜${fmtMoney(data.topMerchantSpend)}` : "")}
-      ${renderWrappedTile("最貴單筆", data.mostExpensiveTx ? fmtMoney(data.mostExpensiveTx.amount) : "N/A", data.mostExpensiveTx ? `${data.mostExpensiveTx.transaction_date}｜${data.mostExpensiveTx.merchant || data.mostExpensiveTx.category_name || ""}` : "")}
-      ${renderWrappedTile("Luxury 花費", fmtMoney(data.luxuryTotal), "necessity_level = luxury")}
-      ${renderWrappedTile("最花錢分類", data.topCategory ? data.topCategory.name : "N/A", data.topCategory ? fmtMoney(data.topCategory.amount) : "")}
-      ${renderWrappedTile("目標達成率", data.goalPct === null ? "N/A" : `${fmtNumber(data.goalPct, 1)}%`, "依目標頁 current / target")}
-      ${renderWrappedTile("年度收入", fmtMoney(data.income), "只計入收入交易")}
+      <div class="wrapped-tile"><span>今年收入</span><strong>${fmtMoney(w.income)}</strong></div>
+      <div class="wrapped-tile"><span>今年淨支出</span><strong>${fmtMoney(w.netExpense)}</strong></div>
+      <div class="wrapped-tile"><span>今年淨收支</span><strong class="${w.saving >= 0 ? "good" : "bad"}">${fmtMoney(w.saving)}</strong></div>
+      <div class="wrapped-tile"><span>交易筆數</span><strong>${fmtNumber(w.txCount)}</strong></div>
+      <div class="wrapped-tile"><span>最大支出分類</span><strong>${escapeHtml(w.topCategory?.name || "N/A")}</strong><em>${fmtMoney(w.topCategory?.amount || 0)}</em></div>
+      <div class="wrapped-tile"><span>最大商家</span><strong>${escapeHtml(w.topMerchant?.name || "N/A")}</strong><em>${fmtMoney(w.topMerchant?.amount || 0)}</em></div>
+      <div class="wrapped-tile"><span>最大單筆支出</span><strong>${escapeHtml(w.biggestExpense?.merchant || w.biggestExpense?.category_name || "N/A")}</strong><em>${fmtMoney(w.biggestExpense?.amount || 0)}</em></div>
+      <div class="wrapped-tile"><span>最佳月份</span><strong>${escapeHtml(w.bestMonth?.label || "N/A")}</strong><em>${fmtMoney(w.bestMonth?.saving || 0)}</em></div>
     </div>
   `;
 }
-
-function renderAnalyticsSummaryCards() {
-  const data = getFinancialWrappedData();
-  const netWorthRows = getNetWorthRows();
-  const latestNetWorth = netWorthRows[netWorthRows.length - 1]?.netWorth || 0;
-  const paretoRows = getParetoRows(999);
-  const paretoTop = paretoRows[0];
-
-  return `
-    <div class="grid cols-4 analytics-kpis">
-      ${metricCard("儲蓄率", data.savingsRate === null ? "N/A" : `${fmtNumber(data.savingsRate, 1)}%`, "年度收入扣除淨支出")}
-      ${metricCard("帳面淨資產", fmtMoney(latestNetWorth), "依帳戶與累積收支估算")}
-      ${metricCard("Luxury 花費", fmtMoney(data.luxuryTotal), "奢侈娛樂支出", "warn")}
-      ${metricCard("最大支出分類", paretoTop ? paretoTop.name : "N/A", paretoTop ? fmtMoney(paretoTop.amount) : "尚無資料")}
-    </div>
-  `;
-}
-
-function buildTAccountLedgerRows() {
-  const ledger = new Map();
-  const txById = new Map((state.data.transactions || []).map(t => [t.id, enrichTransaction(t)]));
-
-  const addEntry = (name, side, entry, tx) => {
-    if (!name) return;
-    if (!ledger.has(name)) {
-      ledger.set(name, { name, debit: [], credit: [], debitTotal: 0, creditTotal: 0 });
-    }
-    const row = ledger.get(name);
-    const amount = Number(entry.amount || 0);
-    const e = {
-      date: entry.entry_date || tx?.transaction_date || "",
-      amount,
-      memo: entry.note || tx?.merchant || tx?.note || labelOf(tx?.type)
-    };
-    row[side].push(e);
-    if (side === "debit") row.debitTotal += amount;
-    if (side === "credit") row.creditTotal += amount;
-  };
-
-  (state.data.transactionEntries || [])
-    .filter(e => {
-      const year = e.entry_date ? Number(String(e.entry_date).slice(0, 4)) : null;
-      const tx = txById.get(e.transaction_id);
-      return year === Number(state.selectedBudgetYear) && (!tx || tx.status !== "cancelled");
-    })
-    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
-    .forEach(e => addEntry(e.label || "未命名分錄", e.side, e, txById.get(e.transaction_id)));
-
-  return Array.from(ledger.values())
-    .sort((a, b) => {
-      const order = name => {
-        if (name.includes("現金") || name.startsWith("銀行") || name.startsWith("信用卡") || name.startsWith("資產")) return 1;
-        if (name.startsWith("費用")) return 2;
-        if (name.startsWith("收入")) return 3;
-        if (name.startsWith("資產調整")) return 4;
-        return 9;
-      };
-      return order(a.name) - order(b.name) || a.name.localeCompare(b.name);
-    });
-}
-
-function renderTAccountCards() {
-  const rows = buildTAccountLedgerRows();
-  if (!rows.length) return `<div class="empty">尚無資料</div>`;
-
-  const renderSide = entries => {
-    if (!entries.length) return `<div class="muted">—</div>`;
-    return entries.slice(0, 18).map(e => `
-      <div class="t-entry">
-        <span>
-          ${escapeHtml(e.memo || "")}
-          <span class="t-entry-date">${escapeHtml(e.date || "")}</span>
-        </span>
-        <strong class="mono">${fmtMoney(e.amount)}</strong>
-      </div>
-    `).join("") + (entries.length > 18 ? `<div class="metric-sub">另有 ${entries.length - 18} 筆未顯示</div>` : "");
-  };
-
-  return `
-    <div class="t-account-grid">
-      ${rows.map(row => {
-        const net = Number(row.debitTotal || 0) - Number(row.creditTotal || 0);
-        return `
-          <div class="t-account-card">
-            <div class="t-account-head">
-              <span class="t-account-name">${escapeHtml(row.name)}</span>
-              <span class="badge">${net >= 0 ? "借餘" : "貸餘"} ${fmtMoney(Math.abs(net))}</span>
-            </div>
-            <div class="t-account-body">
-              <div class="t-side">
-                <div class="t-side-title">借方</div>
-                ${renderSide(row.debit)}
-              </div>
-              <div class="t-side">
-                <div class="t-side-title">貸方</div>
-                ${renderSide(row.credit)}
-              </div>
-            </div>
-            <div class="t-account-total">
-              <span>借方合計 <strong class="mono">${fmtMoney(row.debitTotal)}</strong></span>
-              <span>貸方合計 <strong class="mono">${fmtMoney(row.creditTotal)}</strong></span>
-            </div>
-          </div>
-        `;
-      }).join("")}
-    </div>
-  `;
-}
-
-function renderTAccountTable() {
-  const txById = new Map((state.data.transactions || []).map(t => [t.id, enrichTransaction(t)]));
-  const rows = (state.data.transactionEntries || [])
-    .filter(e => e.entry_date && Number(String(e.entry_date).slice(0, 4)) === Number(state.selectedBudgetYear))
-    .map(e => ({ ...e, tx: txById.get(e.transaction_id) }))
-    .filter(e => !e.tx || e.tx.status !== "cancelled")
-    .sort((a, b) => String(b.entry_date || "").localeCompare(String(a.entry_date || "")))
-    .slice(0, 160);
-
-  if (!rows.length) return `<div class="empty">尚無分錄資料。請到設定執行「重建分錄」。</div>`;
-  return `
-    <div class="table-wrap"><table>
-      <thead><tr><th>日期</th><th>借貸</th><th>科目</th><th>金額</th><th>來源交易</th></tr></thead>
-      <tbody>${rows.map(r => `
-        <tr>
-          <td>${escapeHtml(r.entry_date)}</td>
-          <td><span class="badge">${r.side === "debit" ? "借方" : "貸方"}</span></td>
-          <td>${escapeHtml(r.label || "")}</td>
-          <td class="mono">${fmtMoney(r.amount)}</td>
-          <td>${escapeHtml(r.tx?.merchant || r.tx?.note || labelOf(r.tx?.type))}</td>
-        </tr>`).join("")}</tbody>
-    </table></div>
-  `;
-}
-
-
-function renderTemplates() {
-  const edit = state.editing.quickTemplate;
-  const rows = (state.data.quickTemplates || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name || "").localeCompare(String(b.name || "")));
-
-  return `
-    <div class="card">
-      <div class="card-title-row">
-        <h3>${edit ? "編輯快速模板" : "新增快速模板"}</h3>
-        <span class="badge">v26</span>
-      </div>
-      <p class="metric-sub">v26 取消不可編輯的內建模板。需要起手式時，按「匯入預設模板」，它們會被存成一般自訂模板，之後可編輯、停用或刪除。</p>
-      <form id="quickTemplateForm" class="form-grid">
-        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
-        ${field("模板名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Blue Note、午餐、打工薪水">`)}
-        ${field("類型", `<select class="input" name="type">${selectOpts(["expense","income","refund","transfer"], edit?.type || "expense")}</select>`)}
-        ${field("預設帳戶", `<select class="input" name="account_id">${accountOptions(edit?.account_id || "")}</select>`)}
-        ${field("預設轉入帳戶", `<select class="input" name="to_account_id">${accountOptions(edit?.to_account_id || "")}</select>`)}
-        ${field("預設分類", `<select class="input" name="category_id">${categoryOptions(edit?.type || "expense", edit?.category_id || "")}</select>`)}
-        ${field("預設預算項目", `<select class="input" name="budget_item_id">${budgetItemOptions(edit?.budget_item_id || "")}</select>`)}
-        ${field("商家 / 對象", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}" placeholder="例：Blue Note Taipei">`)}
-        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}" placeholder="例：信用卡、現金">`)}
-        ${field("必要程度", `<select class="input" name="necessity_level">${selectOpts(["survival","quality","luxury","investment","other"], edit?.necessity_level || "other")}</select>`)}
-        ${field("現金流性質", `<select class="input" name="cashflow_nature">${selectOpts(["fixed","variable","one_time"], edit?.cashflow_nature || "variable")}</select>`)}
-        ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(edit?.sort_order || 0)}">`)}
-        ${field("啟用", `<select class="input" name="is_active">
-          <option value="true" ${edit?.is_active !== false ? "selected" : ""}>啟用</option>
-          <option value="false" ${edit?.is_active === false ? "selected" : ""}>停用</option>
-        </select>`)}
-        <div class="field wide">
-          <label>備註</label>
-          <textarea class="input" name="note" placeholder="模板備註，不一定會顯示在流水帳">${escapeHtml(edit?.note || "")}</textarea>
-        </div>
-        <div class="wide btn-row">
-          <button class="btn" type="submit">${edit ? "儲存修改" : "新增模板"}</button>
-          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="quickTemplate">取消編輯</button>` : ""}
-          <button class="btn secondary" type="button" id="seedDefaultTemplatesBtn">匯入預設模板</button>
-        </div>
-      </form>
-    </div>
-
-    <div class="card">
-      <div class="card-title-row">
-        <h3>自訂快速模板</h3>
-        <span class="badge">${rows.length} 個</span>
-      </div>
-      ${renderTemplateCards(rows)}
-    </div>
-  `;
-}
-
-function renderTemplateCards(rows) {
-  if (!rows.length) {
-    return `<div class="empty">尚無自訂模板。你可以按上方「匯入預設模板」，把起手式模板存成可編輯的自訂模板。</div>`;
-  }
-
-  return `
-    <div class="mobile-card-list always-card-list">
-      ${rows.map(t => {
-        const category = state.data.categories.find(c => c.id === t.category_id);
-        const budget = state.data.budgetItems.find(b => b.id === t.budget_item_id);
-        const account = state.data.accounts.find(a => a.id === t.account_id);
-        return `
-          <div class="mobile-data-card">
-            <div class="mobile-data-head">
-              <div>
-                <strong>${escapeHtml(t.name)}</strong>
-                <span>${escapeHtml(labelOf(t.type))} · ${escapeHtml(account?.name || "未指定帳戶")}</span>
-              </div>
-              <span class="badge">${t.is_active === false ? "停用" : "啟用"}</span>
-            </div>
-            <div class="mobile-data-meta">
-              ${category ? `<span class="badge">${escapeHtml(category.name)}</span>` : ""}
-              ${budget ? `<span class="badge">${escapeHtml(budget.name)}</span>` : ""}
-              <span class="badge">${escapeHtml(labelOf(t.necessity_level || "other"))}</span>
-              <span class="badge">${escapeHtml(labelOf(t.cashflow_nature || "variable"))}</span>
-            </div>
-            <div class="mobile-card-actions">
-              <button class="btn small secondary" type="button" data-edit-template="${t.id}">編輯</button>
-              <button type="button" class="btn small danger" data-delete="quick_templates:${t.id}">刪除</button>
-            </div>
-          </div>
-        `;
-      }).join("")}
-    </div>
-  `;
-}
-
-
-function renderMobileMore() {
-  const items = [
-    { tab: "accounts", title: "帳戶", desc: "現金、銀行、電子支付、信用卡餘額" },
-    { tab: "categories", title: "分類 / 標籤", desc: "調整分類、顏色與標籤" },
-    { tab: "recurring", title: "訂閱管理", desc: "固定扣款、下次扣款日與取消狀態" },
-    { tab: "templates", title: "模板管理", desc: "自訂、匯入、編輯快速記一筆模板" },
-    { tab: "creditLoans", title: "信用卡 / 貸款", desc: "信用卡總帳、貸款與債務" },
-    { tab: "goals", title: "目標", desc: "儲蓄、旅遊、還債與大額購買" },
-    { tab: "settings", title: "設定", desc: "匯出資料、連線狀態與提醒" }
-  ];
-
-  return `
-    <div class="mobile-more-grid">
-      ${items.map(item => `
-        <button class="mobile-more-card" type="button" data-go="${item.tab}">
-          <strong>${escapeHtml(item.title)}</strong>
-          <span>${escapeHtml(item.desc)}</span>
-        </button>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderSettings() {
-  return `
-    ${renderDatabaseStatusCard()}
-
-    <div class="grid cols-2">
-      <div class="card">
-        <h3>連線設定</h3>
-        <p class="metric-sub">狀態已整合為「資料庫狀態」：連線、最後讀取、最後寫入。不要再分開看 Supabase / 後端 / 資料庫。</p>
-        <p class="metric-sub">若讀不到資料，先確認：已在資料庫編輯器執行結構檔，且沒有直接開啟列層級安全規則導致缺少存取規則。</p>
-      </div>
-      <div class="card">
-        <h3>資料匯出</h3>
-        <p class="metric-sub">可匯出流水帳 CSV、現金流量表 CSV，或完整 Excel .xlsx 工作簿。</p>
-        <div class="btn-row">
-          <button class="btn secondary" id="exportCsvBtn">匯出流水帳 CSV</button>
-          <button class="btn secondary" id="exportCashflowCsvBtn">匯出現金流量表 CSV</button>
-          <button class="btn secondary" id="exportXlsxBtn">匯出 Excel .xlsx</button>
-          <button class="btn secondary" id="rebuildEntriesBtn">重建分錄</button>
-          <button class="btn secondary" id="downloadJsonBtn">下載暫存資料</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>預設常用帳戶</h3>
-      <p class="metric-sub">手機快速記帳會優先帶入這些帳戶。設定存在本機瀏覽器，不會寫入資料庫。</p>
-      <form id="preferencesForm" class="form-grid two">
-        ${field("支出預設帳戶", `<select class="input" name="default_account_expense">${accountOptions(defaultAccountIdFor("expense"))}</select>`)}
-        ${field("收入預設帳戶", `<select class="input" name="default_account_income">${accountOptions(defaultAccountIdFor("income"))}</select>`)}
-        ${field("轉帳預設轉出帳戶", `<select class="input" name="default_account_transfer">${accountOptions(defaultAccountIdFor("transfer"))}</select>`)}
-        ${field("退款預設帳戶", `<select class="input" name="default_account_refund">${accountOptions(defaultAccountIdFor("refund"))}</select>`)}
-        <div class="wide btn-row">
-          <button class="btn" type="submit">儲存偏好</button>
-        </div>
-      </form>
-    </div>
-
-    <div class="card">
-      <h3>重要限制</h3>
-      <p class="metric-sub">
-        這版沒有 登入驗證 / 列層級安全規則，適合單人測試或非敏感資料。若要公開長期使用，應改成 登入驗證與列層級安全規則。
-      </p>
-    </div>
-  `;
-}
-
-function renderCategoryChart(type, limit = 8) {
-  const rows = state.data.categorySpending
-    .filter(r => Number(r.budget_year) === Number(state.selectedBudgetYear) && r.type === type)
-    .sort((a, b) => Number(b.total_amount || 0) - Number(a.total_amount || 0))
-    .slice(0, limit);
-  if (!rows.length) return `<div class="empty">尚無資料</div>`;
-  const max = Math.max(...rows.map(r => Number(r.total_amount || 0)), 1);
-  return `
-    <div class="chart-list">
-      ${rows.map(r => `
-        <div class="chart-row">
-          <span>${escapeHtml(r.category_name)}</span>
-          <div class="bar"><span style="width:${Math.max(2, Number(r.total_amount || 0) / max * 100)}%"></span></div>
-          <strong class="mono">${fmtMoney(r.total_amount)}</strong>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderMonthlyChart(limit = 12) {
-  const rows = state.data.monthlyCashflow
-    .filter(r => Number(r.budget_year) === Number(state.selectedBudgetYear))
-    .slice(-limit);
-  if (!rows.length) return `<div class="empty">尚無資料</div>`;
-  const max = Math.max(...rows.map(r => Math.max(Number(r.income || 0), Number(r.expense || 0))), 1);
-  return `
-    <div class="chart-list">
-      ${rows.map(r => `
-        <div class="chart-row">
-          <span>${escapeHtml(r.budget_month)} 月</span>
-          <div>
-            <div class="bar" title="收入"><span style="width:${Math.max(2, Number(r.income || 0) / max * 100)}%"></span></div>
-            <div class="bar" title="支出" style="margin-top:4px"><span style="width:${Math.max(2, Number(r.expense || 0) / max * 100)}%"></span></div>
-          </div>
-          <strong class="mono">${fmtMoney(r.net_cashflow)}</strong>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
 
 function renderChartToolbar() {
+  const cats = state.data.categories.filter(c => c.is_active !== false);
   return `
-    <div class="chart-toolbar">
-      <div class="left">
-        <span class="chart-scope-note">圖表篩選</span>
-        <div class="segmented" role="group" aria-label="圖表範圍">
-          <button type="button" class="${state.filters.chartScope === "year" ? "active" : ""}" data-chart-scope="year">本年</button>
-          <button type="button" class="${state.filters.chartScope === "month" ? "active" : ""}" data-chart-scope="month">本月</button>
+    <div class="card filters-card">
+      <div class="filters">
+        <label>圖表篩選</label>
+        <div class="segmented inline">
+          <button class="seg-btn ${state.filters.chartScope === "year" ? "active" : ""}" type="button" data-chart-scope="year">本年</button>
+          <button class="seg-btn ${state.filters.chartScope === "month" ? "active" : ""}" type="button" data-chart-scope="month">本月</button>
         </div>
-      </div>
-      <div class="right">
-        <span class="chart-scope-note">分類</span>
-        <select class="input compact" id="chartCategoryFilter">
-          <option value="">全部分類</option>
-          ${state.data.categories
-            .filter(c => c.type === "expense")
-            .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name))
-            .map(c => `<option value="${escapeHtml(c.id)}" ${state.filters.chartCategory === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
-            .join("")}
-        </select>
-        <span class="chart-scope-note">${escapeHtml(chartScopeText())}</span>
+        <div>
+          <label>分類</label>
+          <select class="input" id="chartCategoryFilter">
+            <option value="">全部分類</option>
+            ${cats.map(c => `<option value="${escapeHtml(c.id)}" ${state.filters.chartCategory === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
+          </select>
+          <p class="metric-sub">${escapeHtml(chartScopeText())}</p>
+        </div>
       </div>
     </div>
   `;
 }
 
 function chartScopeText() {
-  const category = state.data.categories.find(c => c.id === state.filters.chartCategory)?.name || "全部分類";
-  const scope = state.filters.chartScope === "month" ? `${new Date().getMonth() + 1} 月` : `${state.selectedBudgetYear} 年`;
-  return `${scope}｜${category}`;
-}
-
-function renderBudgetProgressList(limit = 8) {
-  const rows = getBudgetCompareRows(limit);
-  if (!rows.length) return `<div class="empty">尚無預算項目</div>`;
-  return `
-    <div class="budget-progress-list">
-      ${rows.map(r => {
-        const pct = r.planned ? Math.max(0, r.actual / r.planned * 100) : 0;
-        return `
-          <div class="budget-progress-item">
-            <div class="top">
-              <strong>${escapeHtml(r.name)}</strong>
-              <span class="badge ${pct > 100 ? "expense" : "income"}">${fmtNumber(pct, 1)}%</span>
-            </div>
-            <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, pct)}%"></span></div>
-            <div class="meta">
-              <span>實際 ${fmtMoney(r.actual)}</span>
-              <span>預算 ${fmtMoney(r.planned)}</span>
-              <span>${Number(r.remaining || 0) >= 0 ? `剩餘 ${fmtMoney(r.remaining)}` : `超支 ${fmtMoney(Math.abs(Number(r.remaining || 0)))}`}</span>
-            </div>
-          </div>
-        `;
-      }).join("")}
-    </div>
-  `;
+  const scope = state.filters.chartScope === "month" ? "本月" : `${state.selectedBudgetYear} 年`;
+  const cat = state.filters.chartCategory ? state.data.categories.find(c => c.id === state.filters.chartCategory)?.name : "全部分類";
+  return `${scope}｜${cat || "全部分類"}`;
 }
 
 function chartTransactions() {
-  const currentMonth = new Date().getMonth() + 1;
+  const now = new Date();
   return transactionsForSelectedYear()
     .filter(t => t.status !== "cancelled")
-    .filter(t => state.filters.chartScope !== "month" || Number(t.tx_month) === currentMonth)
+    .filter(t => {
+      if (state.filters.chartScope !== "month") return true;
+      return Number(t.tx_month) === now.getMonth() + 1 && Number(t.tx_year) === Number(state.selectedBudgetYear);
+    })
     .filter(t => !state.filters.chartCategory || t.category_id === state.filters.chartCategory);
 }
 
 function getBudgetUsageChartData() {
   const s = getCurrentYearSummary();
-  const available = Number(s.available_budget || 0);
   const used = Math.max(0, Number(s.actual_expense || 0));
-  const usedWithinBudget = Math.min(used, available);
-  const overspend = Math.max(0, used - available);
-  const remaining = Math.max(0, available - used);
-
-  if (available <= 0 && used <= 0) return null;
-
-  if (overspend > 0) {
-    return {
-      labels: ["預算內使用", "超支部分"],
-      data: [usedWithinBudget, overspend],
-      colors: ["rgba(10, 132, 255, 0.92)", "rgba(255, 69, 58, 0.92)"]
-    };
-  }
-
+  const remaining = Math.max(0, Number(s.remaining_budget || 0));
+  if (!used && !remaining) return null;
   return {
     labels: ["已使用", "剩餘"],
     data: [used, remaining],
-    colors: ["rgba(10, 132, 255, 0.92)", "rgba(48, 209, 88, 0.92)"]
+    colors: ["rgba(10, 132, 255, 0.85)", "rgba(48, 209, 88, 0.85)"]
   };
 }
 
 function getCategoryNetExpenseRows(limit = 8) {
-  const grouped = new Map();
+  const map = new Map();
   chartTransactions().forEach(t => {
     if (!["expense", "refund"].includes(t.type)) return;
-    const key = t.category_id || t.category_name || "uncategorized";
     const name = t.category_name || "未分類";
-    const delta = t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
-    grouped.set(key, { name, amount: Number((grouped.get(key)?.amount || 0) + delta) });
+    const current = map.get(name) || 0;
+    const delta = t.type === "expense" ? Number(t.amount || 0) : -Number(t.amount || 0);
+    map.set(name, current + delta);
   });
+  return Array.from(map.entries())
+    .map(([name, amount]) => ({ name, amount: Math.max(0, amount) }))
+    .filter(r => r.amount > 0)
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, limit);
+}
 
-  return Array.from(grouped.values())
-    .filter(r => Number(r.amount || 0) > 0)
+function getMerchantRows(limit = 10) {
+  const map = new Map();
+  chartTransactions().forEach(t => {
+    if (t.type !== "expense") return;
+    const name = t.merchant || t.category_name || "未命名";
+    map.set(name, (map.get(name) || 0) + Number(t.amount || 0));
+  });
+  return Array.from(map.entries())
+    .map(([name, amount]) => ({ name, amount }))
     .sort((a, b) => b.amount - a.amount)
     .slice(0, limit);
 }
@@ -4838,14 +2642,15 @@ function getCategoryNetExpenseRows(limit = 8) {
 function getTrendRows() {
   const rows = chartTransactions();
   if (state.filters.chartScope === "month") {
-    const currentMonth = new Date().getMonth() + 1;
-    const daysInMonth = new Date(Number(state.selectedBudgetYear), currentMonth, 0).getDate();
-    const buckets = Array.from({ length: daysInMonth }, (_, i) => ({ label: `${i + 1}日`, income: 0, expense: 0, net: 0 }));
+    const now = new Date();
+    const year = Number(state.selectedBudgetYear);
+    const month = now.getMonth() + 1;
+    const days = new Date(year, month, 0).getDate();
+    const buckets = Array.from({ length: days }, (_, i) => ({ label: String(i + 1), day: i + 1, income: 0, expense: 0, net: 0 }));
     rows.forEach(t => {
-      const date = t.transaction_date ? new Date(`${t.transaction_date}T00:00:00`) : null;
-      const day = date ? date.getDate() : 0;
-      if (!day || day < 1 || day > daysInMonth) return;
-      const bucket = buckets[day - 1];
+      const d = new Date(`${t.transaction_date}T00:00:00`).getDate();
+      const bucket = buckets[d - 1];
+      if (!bucket) return;
       if (t.type === "income") bucket.income += Number(t.amount || 0);
       if (t.type === "expense") bucket.expense += Number(t.amount || 0);
       if (t.type === "refund") bucket.expense -= Number(t.amount || 0);
@@ -5163,7 +2968,6 @@ function initCharts() {
     });
   };
 
-
   const makeCategoryExpenseReportBar = id => {
     const el = document.getElementById(id);
     const rows = categoryExpenseReportRows().slice(0, 10);
@@ -5218,7 +3022,6 @@ function initCharts() {
       }
     });
   };
-
 
   const topFivePlusOther = (rows, nameKey, valueKey) => {
     const clean = rows
@@ -5615,7 +3418,7 @@ async function handleSubmit(event) {
     await loadAll();
     clearEditing();
     render();
-    showAlert(`v58 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
+    showAlert(`v59 驗證通過：${tableLabel(formToTable(formId))} 已真正寫入資料庫｜id=${escapeHtml(saved?.id || "無")}`, "good");
   } catch (error) {
     showAlert(`儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5654,7 +3457,7 @@ async function handleRecurringSubmit(event) {
 
     state.editing.recurring = null;
     render();
-    showAlert(`v58 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
+    showAlert(`v59 驗證通過：訂閱已真正寫入資料庫｜${escapeHtml(saved.name)}｜目前列表 ${rows.length} 筆。`, "good");
   } catch (error) {
     showAlert(`訂閱儲存失敗：${escapeHtml(error.message)}`, "bad");
   }
@@ -5918,11 +3721,34 @@ async function saveBudgetItem(form) {
     start_date: d.start_date || null,
     end_date: d.end_date || null,
     rollover_mode: d.rollover_mode || "none",
-    sort_order: Number(d.sort_order || 0),
+    sort_order: numberOrZero(d.sort_order),
     is_active: boolValue(d.is_active),
-    note: d.note
+    note: d.note || null
   };
-  return await upsert("budget_items", payload, { expect: { name: payload.name, planned_amount: payload.planned_amount } });
+  return await upsert("budget_items", payload, { expect: { name: payload.name } });
+}
+
+async function saveGlobalBudgetContribution(form) {
+  const d = readForm(form);
+  if (!d.contribution_date) throw new Error("請選擇提撥日期");
+  if (!Number(d.amount)) throw new Error("請輸入提撥金額");
+
+  const rows = globalBudgetContributionRowsForSelectedYear();
+  rows.push({
+    id: makeClientId("global_budget_contribution"),
+    contribution_date: d.contribution_date,
+    amount: numberOrZero(d.amount),
+    note: d.note || ""
+  });
+
+  return await updateSelectedYearGlobalContributions(rows);
+}
+
+async function deleteGlobalBudgetContribution(id) {
+  const rows = globalBudgetContributionRowsForSelectedYear();
+  const nextRows = rows.filter(r => r.id !== id);
+  if (nextRows.length === rows.length) throw new Error("找不到這筆全局提撥紀錄。");
+  return await updateSelectedYearGlobalContributions(nextRows);
 }
 
 async function saveAccount(form) {
@@ -5930,14 +3756,15 @@ async function saveAccount(form) {
   const payload = {
     id: d.id || undefined,
     name: d.name,
-    type: d.type || "bank",
+    type: d.type,
+    currency: d.currency || "TWD",
     initial_balance: numberOrZero(d.initial_balance),
-    opening_date: d.opening_date,
-    note: applyAccountCoverageMarker(d.note, d.coverage_mode || "auto"),
-    sort_order: Number(d.sort_order || 0),
-    is_active: boolValue(d.is_active)
+    color: d.color || "#64748b",
+    sort_order: numberOrZero(d.sort_order),
+    is_active: boolValue(d.is_active),
+    note: applyAccountCoverageMarker(d.note || "", d.coverage_mode || "auto")
   };
-  return await upsert("accounts", payload, { expect: { name: payload.name, type: payload.type } });
+  return await upsert("accounts", payload, { expect: { name: payload.name } });
 }
 
 async function saveCategory(form) {
@@ -5945,84 +3772,114 @@ async function saveCategory(form) {
   const payload = {
     id: d.id || undefined,
     name: d.name,
-    type: d.type || "expense",
-    color: d.color,
-    sort_order: Number(d.sort_order || 0)
+    type: d.type,
+    parent_id: d.parent_id || null,
+    color: d.color || "#64748b",
+    sort_order: numberOrZero(d.sort_order),
+    is_active: boolValue(d.is_active),
+    note: d.note || null
   };
-  return await upsert("categories", payload, { expect: { name: payload.name, type: payload.type } });
+  return await upsert("categories", payload, { expect: { name: payload.name } });
 }
 
 async function saveTag(form) {
   const d = readForm(form);
-  const payload = {
+  return await upsert("tags", {
     id: d.id || undefined,
     name: d.name,
-    color: d.color,
-    note: d.note
-  };
-  return await upsert("tags", payload, { expect: { name: payload.name } });
+    color: d.color || "#64748b",
+    note: d.note || null
+  }, { expect: { name: d.name } });
 }
 
 async function saveRecurring(form) {
   const d = readForm(form);
-  if (!d.name) throw new Error("請輸入服務名稱");
-  if (!d.account_id) throw new Error("請選擇付款帳戶");
-  if (!Number(d.amount)) throw new Error("請輸入金額");
-  if (!d.start_date) throw new Error("請選擇開始日");
-  if (!d.next_due_date) throw new Error("請選擇下次扣款日");
-
   const payload = {
+    id: d.id || undefined,
     name: d.name,
-    type: "expense",
+    type: d.type || state.draftRecurringType || "expense",
     account_id: d.account_id,
-    to_account_id: null,
     category_id: d.category_id || null,
     budget_item_id: d.budget_item_id || null,
     amount: numberOrZero(d.amount),
     frequency: d.frequency || "monthly",
-    interval_count: Number(d.interval_count || 1),
-    start_date: d.start_date,
-    end_date: d.end_date || null,
+    interval_count: numberOrZero(d.interval_count) || 1,
     next_due_date: d.next_due_date,
     merchant: d.merchant || null,
     payment_method: d.payment_method || null,
-    note: d.note || null,
-    is_active: boolValue(d.is_active)
+    reminder_days: numberOrZero(d.reminder_days),
+    auto_create_transaction: boolValue(d.auto_create_transaction),
+    is_active: boolValue(d.is_active),
+    note: d.note || null
   };
 
-  const saved = await writeRow("recurring_transactions", { id: d.id || undefined, ...payload }, {
-    expect: { name: payload.name, type: "expense", amount: payload.amount }
-  });
+  if (!payload.name) throw new Error("請輸入訂閱名稱");
+  if (!payload.account_id) throw new Error("請選擇付款帳戶");
+  if (!payload.amount) throw new Error("請輸入金額");
+  if (!payload.next_due_date) throw new Error("請選擇下次扣款日");
 
-  return saved;
+  return await upsert("recurring_transactions", payload, { expect: { name: payload.name, amount: payload.amount } });
+}
+
+async function saveQuickTemplate(form) {
+  const d = readForm(form);
+  const payload = {
+    id: d.id || undefined,
+    name: d.name,
+    type: d.type || "expense",
+    default_account_id: d.default_account_id || null,
+    default_to_account_id: d.default_to_account_id || null,
+    category_id: d.category_id || null,
+    budget_item_id: d.budget_item_id || null,
+    merchant: d.merchant || null,
+    default_amount: d.default_amount ? numberOrZero(d.default_amount) : null,
+    payment_method: d.payment_method || null,
+    necessity_level: d.necessity_level || "quality",
+    cashflow_nature: d.cashflow_nature || "variable",
+    control_level: d.control_level || "controllable",
+    sort_order: numberOrZero(d.sort_order),
+    is_active: boolValue(d.is_active),
+    note: d.note || null
+  };
+  return await upsert("quick_templates", payload, { expect: { name: payload.name, type: payload.type } });
 }
 
 async function saveCreditCard(form) {
   const d = readForm(form);
   const payload = {
     id: d.id || undefined,
-    account_id: d.account_id,
-    issuer: d.issuer,
-    card_name: d.card_name,
-    statement_day: d.statement_day ? Number(d.statement_day) : null,
-    payment_due_day: d.payment_due_day ? Number(d.payment_due_day) : null,
-    credit_limit: numberOrZero(d.credit_limit)
+    account_id: d.account_id || null,
+    name: d.name,
+    issuer: d.issuer || null,
+    card_network: d.card_network || null,
+    credit_limit: numberOrZero(d.credit_limit),
+    statement_day: numberOrZero(d.statement_day),
+    payment_due_day: numberOrZero(d.payment_due_day),
+    annual_fee: numberOrZero(d.annual_fee),
+    reward_type: d.reward_type || null,
+    reward_rate: d.reward_rate ? Number(d.reward_rate) : null,
+    is_active: boolValue(d.is_active),
+    note: d.note || null
   };
-  return await upsert("credit_cards", payload, { expect: { account_id: payload.account_id, card_name: payload.card_name } });
+  return await upsert("credit_cards", payload, { expect: { name: payload.name } });
 }
 
 async function saveLoan(form) {
   const d = readForm(form);
   const payload = {
     id: d.id || undefined,
+    account_id: d.account_id || null,
     name: d.name,
-    loan_type: d.loan_type || "other",
-    creditor: d.creditor,
+    loan_type: d.loan_type || "personal_loan",
     principal_amount: numberOrZero(d.principal_amount),
-    remaining_principal: numberOrZero(d.remaining_principal),
-    annual_interest_rate: numberOrZero(d.annual_interest_rate),
+    current_balance: numberOrZero(d.current_balance),
+    interest_rate: d.interest_rate ? Number(d.interest_rate) : null,
     monthly_payment: numberOrZero(d.monthly_payment),
-    status: d.status || "active"
+    payment_day: numberOrZero(d.payment_day),
+    start_date: d.start_date || null,
+    end_date: d.end_date || null,
+    status: d.status || "active",
+    note: d.note || null
   };
   return await upsert("loans", payload, { expect: { name: payload.name } });
 }
@@ -6035,156 +3892,12 @@ async function saveGoal(form) {
     goal_type: d.goal_type || "saving",
     target_amount: numberOrZero(d.target_amount),
     current_amount: numberOrZero(d.current_amount),
-    start_date: d.start_date,
-    target_date: d.target_date,
-    priority: Number(d.priority || 3),
+    target_date: d.target_date || null,
+    priority: numberOrZero(d.priority),
     status: d.status || "active",
-    note: d.note
+    note: d.note || null
   };
   return await upsert("goals", payload, { expect: { name: payload.name } });
-}
-
-
-
-function mapBuiltinTemplateToPayload(template, index = 0) {
-  const category = findCategoryByNames(template.categoryNames || []);
-  const budgetItem = findBudgetItemByNames(template.budgetNames || []);
-  const account = findAccountByTypes(template.accountTypes || []);
-
-  return {
-    name: template.name || template.label || `模板 ${index + 1}`,
-    type: template.type || "expense",
-    account_id: account?.id || null,
-    to_account_id: null,
-    category_id: category?.id || null,
-    budget_item_id: budgetItem?.budget_item_id || budgetItem?.id || null,
-    merchant: template.merchant || template.name || "",
-    payment_method: account?.type === "credit_card" ? "信用卡" : labelOf(account?.type || ""),
-    necessity_level: template.necessity_level || template.necessity || "other",
-    cashflow_nature: template.cashflow_nature || template.cashflow || "variable",
-    note: "由預設模板匯入，可自行編輯或刪除",
-    sort_order: index,
-    is_active: true
-  };
-}
-
-async function seedDefaultQuickTemplates() {
-  if ((state.data.quickTemplates || []).length) {
-    const ok = await confirmAction("匯入預設模板", "目前已經有自訂模板。仍要再匯入一組預設模板嗎？這會新增重複模板，但你可以之後自行刪除。");
-    if (!ok) return [];
-  }
-
-  const payloads = fallbackQuickTemplates.map(mapBuiltinTemplateToPayload);
-  const rows = [];
-  for (const payload of payloads) {
-    rows.push(await insert("quick_templates", payload));
-  }
-  await loadAll();
-  render();
-  showAlert(`已匯入 ${rows.length} 個預設模板，現在都可以編輯、停用或刪除。`, "good");
-  return rows;
-}
-
-async function saveQuickTemplate(form) {
-  const d = readForm(form);
-  const payload = {
-    id: d.id || undefined,
-    name: d.name,
-    type: d.type || "expense",
-    account_id: d.account_id || null,
-    to_account_id: d.type === "transfer" ? d.to_account_id || null : null,
-    category_id: d.category_id || null,
-    budget_item_id: d.budget_item_id || null,
-    merchant: d.merchant,
-    payment_method: d.payment_method,
-    necessity_level: d.necessity_level || "other",
-    cashflow_nature: d.cashflow_nature || "variable",
-    note: d.note,
-    sort_order: Number(d.sort_order || 0),
-    is_active: boolValue(d.is_active)
-  };
-  return await upsert("quick_templates", payload, { expect: { name: payload.name, type: payload.type } });
-}
-
-function clearEditing() {
-  Object.keys(state.editing).forEach(k => state.editing[k] = null);
-}
-
-
-
-async function closeBudgetItemCycle(itemId) {
-  const row = budgetItemSummariesForSelectedYear().find(r => r.budget_item_id === itemId);
-  if (!row) {
-    showAlert("結帳失敗：找不到預算項目。", "bad");
-    return;
-  }
-
-  const carry = Math.round(Number(row.remaining_amount || 0));
-  if (carry < 0) {
-    showAlert(`不能結帳：${row.name} 目前超支 ${fmtMoney(Math.abs(carry))}。請先補洞或移轉預算。`, "bad");
-    return;
-  }
-
-  const ok = await confirmAction(
-    "預算項目結帳",
-    `確定要結帳「${row.name}」？\n\n目前週期剩餘銀彈：${fmtMoney(carry)}\n結帳後主畫面會變成：\n可用 ${fmtMoney(carry)}\n實際 $0\n剩餘 ${fmtMoney(carry)}\n\n累積資訊仍會保留歷史可用 / 實際 / 剩餘。`
-  );
-  if (!ok) return;
-
-  await insert("budget_contributions", {
-    budget_item_id: row.budget_item_id,
-    contribution_date: today(),
-    amount: carry,
-    note: `[CLOSE] ${today()} 結帳承接銀彈｜${row.name}`
-  });
-
-  await loadAll();
-  render();
-  showAlert(`已結帳「${row.name}」：新週期銀彈 ${fmtMoney(carry)}，實際歸 0。`, "good", { timeout: 7000 });
-}
-
-async function updateWhereIn(table, column, values, patch) {
-  if (!values?.length) return;
-  const { error } = await state.client.from(table).update(patch).in(column, values);
-  if (error) throw new Error(`${table} 更新失敗：${formatSupabaseError(error)}`);
-}
-
-async function deleteWhereIn(table, column, values) {
-  if (!values?.length) return;
-  const { error } = await state.client.from(table).delete().in(column, values);
-  if (error) throw new Error(`${table} 刪除失敗：${formatSupabaseError(error)}`);
-}
-
-async function deleteWhereOrBudgetMovement(itemIds) {
-  if (!itemIds?.length) return;
-  const { error } = await state.client
-    .from("budget_movements")
-    .delete()
-    .or(`from_budget_item_id.in.(${itemIds.join(",")}),to_budget_item_id.in.(${itemIds.join(",")})`);
-  if (error) throw new Error(`budget_movements 刪除失敗：${formatSupabaseError(error)}`);
-}
-
-async function removeYearCascade(yearId) {
-  const year = state.data.years.find(y => y.id === yearId);
-  const items = (state.data.budgetItems || []).filter(i => i.year_id === yearId);
-  const itemIds = items.map(i => i.id);
-
-  if (itemIds.length) {
-    await updateWhereIn("transactions", "budget_item_id", itemIds, { budget_item_id: null });
-    await updateWhereIn("transaction_entries", "budget_item_id", itemIds, { budget_item_id: null });
-    await updateWhereIn("transaction_splits", "budget_item_id", itemIds, { budget_item_id: null });
-    await deleteWhereIn("budget_contributions", "budget_item_id", itemIds);
-    await deleteWhereOrBudgetMovement(itemIds);
-    await deleteWhereIn("budget_items", "id", itemIds);
-  }
-
-  await removeRow("years", yearId);
-  return { year, deletedItems: itemIds.length };
-}
-
-async function removeEntity(table, id) {
-  if (table === "years") return await removeYearCascade(id);
-  return await removeRow(table, id);
 }
 
 async function closeYearToNextYear() {
@@ -6196,7 +3909,7 @@ async function closeYearToNextYear() {
 
   const ok = await confirmAction(
     "年度結轉",
-    `確定要關閉 ${state.selectedBudgetYear} 年？\n\n${nextYearNumber} 年將使用：\n前期結轉：${fmtMoney(carryover)}\n年度提撥合計：先由下一年的全局提撥紀錄累積，不再填每次提撥金額。`
+    `確定要關閉 ${state.selectedBudgetYear} 年？\n\n${nextYearNumber} 年將使用：\n前期結轉：${fmtMoney(carryover)}\n年度總預算：先由下一年的全局提撥紀錄累積，不再填每次提撥金額。`
   );
   if (!ok) return;
 
@@ -6226,43 +3939,153 @@ async function closeYearToNextYear() {
 }
 
 function bindRenderedEvents() {
-  $("#recurringForm")?.addEventListener("submit", handleRecurringSubmit);
-  $$("form").filter(form => form.getAttribute("id") !== "recurringForm").forEach(form => form.addEventListener("submit", handleSubmit));
+  $$("form").forEach(form => {
+    if (form.id === "recurringForm") form.addEventListener("submit", handleRecurringSubmit);
+    else form.addEventListener("submit", handleSubmit);
+  });
 
   $$("[data-tx-mode]").forEach(btn => btn.addEventListener("click", () => {
-    state.draftTxType = btn.dataset.txMode || "expense";
-    state.editing.transaction = null;
+    state.draftTxType = btn.dataset.txMode;
+    state.transactionDraft = { transaction_date: today(), type: state.draftTxType };
     render();
   }));
 
-  $$("[data-tx-template]").forEach(btn => btn.addEventListener("click", () => applyQuickTxTemplate(btn.dataset.txTemplate)));
+  $$("[data-recurring-type]").forEach(btn => btn.addEventListener("click", () => {
+    state.draftRecurringType = btn.dataset.recurringType;
+    render();
+  }));
 
-  $("#seedDefaultTemplatesBtn")?.addEventListener("click", async () => {
-    try {
-      await seedDefaultQuickTemplates();
-    } catch (error) {
-      showAlert(`匯入預設模板失敗：${escapeHtml(error.message)}`, "bad");
-    }
-  });
+  $$("[data-quick-template]").forEach(btn => btn.addEventListener("click", () => {
+    const draft = transactionDraftFromTemplate(btn.dataset.quickTemplate, btn.dataset.templateKind);
+    if (!draft) return;
+    state.draftTxType = draft.type || state.draftTxType;
+    state.transactionDraft = draft;
+    showAlert(`已套用模板：${escapeHtml(btn.textContent.trim())}`, "good");
+    render();
+  }));
 
+  $("#filterTxSearch")?.addEventListener("input", e => { state.filters.txSearch = e.target.value; render(); });
+  $("#filterTxType")?.addEventListener("change", e => { state.filters.txType = e.target.value; render(); });
+  $("#filterTxCategory")?.addEventListener("change", e => { state.filters.txCategory = e.target.value; render(); });
+  $("#filterTxAccount")?.addEventListener("change", e => { state.filters.txAccount = e.target.value; render(); });
+  $("#filterTxStart")?.addEventListener("change", e => { state.filters.txStart = e.target.value; render(); });
+  $("#filterTxEnd")?.addEventListener("change", e => { state.filters.txEnd = e.target.value; render(); });
+
+  $("#chartCategoryFilter")?.addEventListener("change", e => { state.filters.chartCategory = e.target.value; render(); });
   $$("[data-chart-scope]").forEach(btn => btn.addEventListener("click", () => {
-    state.filters.chartScope = btn.dataset.chartScope || "year";
+    state.filters.chartScope = btn.dataset.chartScope;
     render();
   }));
 
-  $("#chartCategoryFilter")?.addEventListener("change", e => {
-    state.filters.chartCategory = e.target.value;
+  $$("[data-edit-tx]").forEach(btn => btn.addEventListener("click", () => {
+    state.editing.transaction = state.data.transactionView.find(x => x.id === btn.dataset.editTx) || state.data.transactions.find(x => x.id === btn.dataset.editTx);
+    state.draftTxType = state.editing.transaction?.type || "expense";
+    state.transactionDraft = null;
+    window.scrollTo({ top: 0, behavior: "smooth" });
     render();
+  }));
+
+  $$("[data-edit-budget]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
+    state.editing.budgetItem = state.data.budgetItems.find(x => x.id === btn.dataset.editBudget);
+    state.budgetOperationMode = "item";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    render();
+  }));
+
+  $$("[data-close-budget-item]").forEach(btn => btn.addEventListener("click", async () => {
+    const item = state.data.budgetItems.find(x => x.id === btn.dataset.closeBudgetItem);
+    const ok = await confirmAction("結帳預算項目", `確定要結帳「${item?.name || "預算項目"}」？\n\n這會把目前剩餘額度承接為新可用額度，並讓主畫面的實際金額從 0 重新開始。歷史累積會保留在項目明細。`);
+    if (!ok) return;
+    try {
+      await closeBudgetItemCycle(btn.dataset.closeBudgetItem);
+      await loadAll();
+      render();
+      showAlert("預算項目已結帳。", "good");
+    } catch (error) {
+      showAlert(`結帳失敗：${escapeHtml(error.message)}`, "bad");
+    }
+  }));
+
+  $$("[data-edit-contribution]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
+    state.editing.budgetContribution = state.data.budgetContributions.find(x => x.id === btn.dataset.editContribution);
+    state.budgetOperationMode = "itemContribution";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    render();
+  }));
+
+  $$("[data-edit-movement]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
+    state.editing.budgetMovement = state.data.budgetMovements.find(x => x.id === btn.dataset.editMovement);
+    state.budgetOperationMode = "movement";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    render();
+  }));
+
+  $$("[data-edit-year]").forEach(btn => btn.addEventListener("click", () => {
+    clearBudgetOperationEditing();
+    state.editing.year = state.data.years.find(x => x.id === btn.dataset.editYear);
+    state.budgetOperationMode = "year";
+    render();
+  }));
+
+  $$("[data-edit-account]").forEach(btn => btn.addEventListener("click", () => { state.editing.account = state.data.accounts.find(x => x.id === btn.dataset.editAccount); render(); }));
+  $$("[data-edit-category]").forEach(btn => btn.addEventListener("click", () => { state.editing.category = state.data.categories.find(x => x.id === btn.dataset.editCategory); render(); }));
+  $$("[data-edit-tag]").forEach(btn => btn.addEventListener("click", () => { state.editing.tag = state.data.tags.find(x => x.id === btn.dataset.editTag); render(); }));
+  $$("[data-edit-recurring]").forEach(btn => btn.addEventListener("click", () => { state.editing.recurring = state.data.recurring.find(x => x.id === btn.dataset.editRecurring); state.draftRecurringType = state.editing.recurring?.type || "expense"; render(); }));
+  $$("[data-edit-template]").forEach(btn => btn.addEventListener("click", () => { state.editing.quickTemplate = state.data.quickTemplates.find(x => x.id === btn.dataset.editTemplate); render(); }));
+  $$("[data-edit-card]").forEach(btn => btn.addEventListener("click", () => { state.editing.creditCard = state.data.creditCards.find(x => x.id === btn.dataset.editCard); render(); }));
+  $$("[data-edit-loan]").forEach(btn => btn.addEventListener("click", () => { state.editing.loan = state.data.loans.find(x => x.id === btn.dataset.editLoan); render(); }));
+  $$("[data-edit-goal]").forEach(btn => btn.addEventListener("click", () => { state.editing.goal = state.data.goals.find(x => x.id === btn.dataset.editGoal); render(); }));
+
+  $$("[data-cancel-edit]").forEach(btn => btn.addEventListener("click", () => {
+    const key = btn.dataset.cancelEdit;
+    if (key && state.editing[key] !== undefined) state.editing[key] = null;
+    state.transactionDraft = null;
+    render();
+  }));
+
+  $$("[data-delete]").forEach(btn => btn.addEventListener("click", async () => {
+    const [table, id] = btn.dataset.delete.split(":");
+    const ok = await confirmAction("刪除資料", `確定刪除這筆${tableLabel(table)}？`);
+    if (!ok) return;
+    try {
+      await removeRow(table, id);
+      await loadAll();
+      render();
+      showAlert(`${tableLabel(table)}已刪除，且資料庫已驗證不存在。`, "good");
+    } catch (error) {
+      showAlert(`刪除失敗：${escapeHtml(error.message)}`, "bad");
+    }
+  }));
+
+  $$("[data-delete-global-contribution]").forEach(btn => btn.addEventListener("click", async () => {
+    const id = btn.dataset.deleteGlobalContribution;
+    const ok = await confirmAction("刪除全局提撥", "確定要刪除這筆全局預算提撥？");
+    if (!ok) return;
+    try {
+      await deleteGlobalBudgetContribution(id);
+      await loadAll();
+      render();
+      showAlert("全局預算提撥已刪除。", "good");
+    } catch (error) {
+      showAlert(`刪除全局提撥失敗：${escapeHtml(error.message)}`, "bad");
+    }
+  }));
+
+  $("#closeYearBtn")?.addEventListener("click", async () => {
+    try { await closeYearToNextYear(); } catch (error) { showAlert(`年度結轉失敗：${escapeHtml(error.message)}`, "bad"); }
   });
 
-  $("#runMonthCloseSweepBtn")?.addEventListener("click", () => runMonthCloseSweepPrompt({ auto: false }));
-  $("#rolloverAnnualItemsBtn")?.addEventListener("click", async () => {
-    try {
-      await rolloverAnnualBudgetItemsToNextYear();
-    } catch (error) {
-      showAlert(`年度結轉型項目結轉失敗：${escapeHtml(error.message)}`, "bad");
-    }
-  });
+  $("#downloadJsonBtn")?.addEventListener("click", downloadCacheJson);
+  $("#exportCsvBtn")?.addEventListener("click", exportTransactionsCsv);
+  $("#exportCashflowCsvBtn")?.addEventListener("click", exportCashflowCsv);
+  $("#exportXlsxBtn")?.addEventListener("click", exportWorkbookXlsx);
+  $("#rebuildEntriesBtn")?.addEventListener("click", rebuildAllTransactionEntries);
+  $("#mobileQuickAdd")?.addEventListener("click", () => setPage("transactions"));
+  $$("[data-mobile-tab]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.mobileTab)));
+  $("#importDefaultTemplatesBtn")?.addEventListener("click", importDefaultTemplates);
 
   $$("[data-report-mode]").forEach(btn => btn.addEventListener("click", () => {
     const group = btn.dataset.reportGroup;
@@ -6293,254 +4116,944 @@ function bindRenderedEvents() {
   }));
 
   $$("[data-go]").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.go)));
-
-  $$("[data-cancel-edit]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing[btn.dataset.cancelEdit] = null;
-    render();
-  }));
-
-  const txTypeInput = $("#txTypeInput");
-  if (txTypeInput) {
-    txTypeInput.addEventListener("change", e => {
-      if (state.editing.transaction) state.editing.transaction.type = e.target.value;
-      state.draftTxType = e.target.value;
-      render();
-    });
-  }
-
-  const recurringTypeInput = $("#recurringTypeInput");
-  if (recurringTypeInput) {
-    recurringTypeInput.addEventListener("change", e => {
-      if (state.editing.recurring) state.editing.recurring.type = e.target.value;
-      state.draftRecurringType = e.target.value;
-      render();
-    });
-  }
-
-  $("#refreshRecurringBtn")?.addEventListener("click", async () => {
-    try {
-      const rows = await loadRecurringOnly();
-      render();
-      showAlert(`已重新讀取訂閱列表：${rows.length} 筆。`, "good");
-    } catch (error) {
-      showAlert(`重新讀取訂閱失敗：${escapeHtml(error.message)}`, "bad");
-    }
-  });
-
-  $("#filterTxSearch")?.addEventListener("input", e => { state.filters.txSearch = e.target.value; render(); });
-  $("#filterTxType")?.addEventListener("change", e => { state.filters.txType = e.target.value; render(); });
-  $("#filterTxCategory")?.addEventListener("change", e => { state.filters.txCategory = e.target.value; render(); });
-  $("#filterTxAccount")?.addEventListener("change", e => { state.filters.txAccount = e.target.value; render(); });
-  $("#filterTxStart")?.addEventListener("change", e => { state.filters.txStart = e.target.value; render(); });
-  $("#filterTxEnd")?.addEventListener("change", e => { state.filters.txEnd = e.target.value; render(); });
-
-  $$("[data-edit-tx]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.transaction = state.data.transactions.find(x => x.id === btn.dataset.editTx);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    render();
-  }));
-  $$("[data-edit-budget]").forEach(btn => btn.addEventListener("click", () => {
-    clearBudgetOperationEditing();
-    state.editing.budgetItem = state.data.budgetItems.find(x => x.id === btn.dataset.editBudget);
-    state.budgetOperationMode = "item";
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    render();
-  }));
-  $$("[data-close-budget]").forEach(btn => btn.addEventListener("click", async () => {
-    try {
-      await closeBudgetItemCycle(btn.dataset.closeBudget);
-    } catch (error) {
-      showAlert(`預算項目結帳失敗：${escapeHtml(error.message)}`, "bad");
-    }
-  }));
-  $$("[data-edit-contribution]").forEach(btn => btn.addEventListener("click", () => {
-    clearBudgetOperationEditing();
-    state.editing.budgetContribution = state.data.budgetContributions.find(x => x.id === btn.dataset.editContribution);
-    state.budgetOperationMode = "itemContribution";
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    render();
-  }));
-  $$("[data-edit-movement]").forEach(btn => btn.addEventListener("click", () => {
-    clearBudgetOperationEditing();
-    state.editing.budgetMovement = state.data.budgetMovements.find(x => x.id === btn.dataset.editMovement);
-    state.budgetOperationMode = "movement";
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    render();
-  }));
-  $$("[data-edit-account]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.account = state.data.accounts.find(x => x.id === btn.dataset.editAccount);
-    render();
-  }));
-  $$("[data-edit-category]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.category = state.data.categories.find(x => x.id === btn.dataset.editCategory);
-    render();
-  }));
-  $$("[data-edit-tag]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.tag = state.data.tags.find(x => x.id === btn.dataset.editTag);
-    render();
-  }));
-  $$("[data-edit-recurring]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.recurring = state.data.recurring.find(x => x.id === btn.dataset.editRecurring);
-    render();
-  }));
-  $$("[data-edit-template]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.quickTemplate = state.data.quickTemplates.find(x => x.id === btn.dataset.editTemplate);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    render();
-  }));
-
-  $$("[data-edit-card]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.creditCard = state.data.creditCards.find(x => x.id === btn.dataset.editCard);
-    render();
-  }));
-  $$("[data-edit-loan]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.loan = state.data.loans.find(x => x.id === btn.dataset.editLoan);
-    render();
-  }));
-  $$("[data-edit-goal]").forEach(btn => btn.addEventListener("click", () => {
-    state.editing.goal = state.data.goals.find(x => x.id === btn.dataset.editGoal);
-    render();
-  }));
-  $$("[data-edit-year]").forEach(btn => btn.addEventListener("click", () => {
-    clearBudgetOperationEditing();
-    state.editing.year = state.data.years.find(x => x.id === btn.dataset.editYear);
-    state.budgetOperationMode = "year";
-    render();
-  }));
-
-  $$('[data-delete]').forEach(btn => btn.addEventListener('click', async event => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const raw = btn.getAttribute('data-delete') || '';
-    const [table, id] = raw.split(':');
-
-    if (!table || !id) {
-      showAlert(`刪除失敗：刪除按鈕資料不完整。data-delete=${escapeHtml(raw)}`, 'bad');
-      return;
-    }
-
-    const deleteMessage = table === "years"
-      ? "確定要刪除這個年度？系統會先清理該年度底下的預算項目、預算提撥、預算移轉，以及交易 / 分錄 / 拆帳對這些預算項目的引用。刪除後無法從畫面復原。"
-      : `確定要刪除「${tableLabel(table)}」這筆資料？刪除後無法從畫面復原。`;
-    const ok = await confirmAction('確認刪除', deleteMessage);
-    if (!ok) return;
-
-    try {
-      await removeEntity(table, id);
-      await loadAll();
-      clearEditing();
-      render();
-      showAlert(`v58 驗證通過：${tableLabel(table)} 已真正從資料庫刪除。`, 'good');
-    } catch (error) {
-      showAlert(`刪除失敗：${escapeHtml(error.message)}`, 'bad');
-    }
-  }));
-
-  $$("[data-delete-global-contribution]").forEach(btn => btn.addEventListener("click", async () => {
-    const id = btn.dataset.deleteGlobalContribution;
-    const ok = await confirmAction("刪除全局提撥", "確定要刪除這筆全局預算提撥？");
-    if (!ok) return;
-    try {
-      await deleteGlobalBudgetContribution(id);
-      await loadAll();
-      render();
-      showAlert("全局預算提撥已刪除。", "good");
-    } catch (error) {
-      showAlert(`刪除全局提撥失敗：${escapeHtml(error.message)}`, "bad");
-    }
-  }));
-
-  $("#closeYearBtn")?.addEventListener("click", async () => {
-    try {
-      await closeYearToNextYear();
-    } catch (error) {
-      showAlert(`結轉失敗：${escapeHtml(error.message)}`, "bad");
-    }
-  });
-
-  $("#exportCsvBtn")?.addEventListener("click", exportCurrentYearCsv);
-  $("#exportCashflowCsvBtn")?.addEventListener("click", exportCashflowStatementCsv);
-  $("#exportXlsxBtn")?.addEventListener("click", exportWorkbookXlsx);
-  $("#rebuildEntriesBtn")?.addEventListener("click", async () => {
-    try {
-      await rebuildAllTransactionEntries();
-    } catch (error) {
-      showAlert(`重建分錄失敗：${escapeHtml(error.message)}`, "bad");
-    }
-  });
-  $("#downloadJsonBtn")?.addEventListener("click", downloadCacheJson);
 }
 
-function confirmAction(title, message) {
-  const dialog = $('#confirmDialog');
-  const titleEl = $('#confirmTitle');
-  const messageEl = $('#confirmMessage');
-  const cancelBtn = $('#confirmCancelBtn');
-  const okBtn = $('#confirmOkBtn');
-
-  if (!dialog || !titleEl || !messageEl || !cancelBtn || !okBtn || typeof dialog.showModal !== 'function') {
-    return Promise.resolve(window.confirm(`${title}
-
-${message}`));
-  }
-
-  titleEl.textContent = title;
-  messageEl.textContent = message;
-
-  return new Promise(resolve => {
-    let settled = false;
-    const cleanup = () => {
-      cancelBtn.removeEventListener('click', onCancel);
-      okBtn.removeEventListener('click', onOk);
-      dialog.removeEventListener('cancel', onCancel);
-      dialog.removeEventListener('close', onClose);
-    };
-    const finish = value => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if (dialog.open) dialog.close(value ? 'confirm' : 'cancel');
-      resolve(value);
-    };
-    const onCancel = event => {
-      event.preventDefault();
-      finish(false);
-    };
-    const onOk = event => {
-      event.preventDefault();
-      finish(true);
-    };
-    const onClose = () => finish(dialog.returnValue === 'confirm');
-
-    cancelBtn.addEventListener('click', onCancel);
-    okBtn.addEventListener('click', onOk);
-    dialog.addEventListener('cancel', onCancel);
-    dialog.addEventListener('close', onClose);
-    dialog.showModal();
-  });
+function clearEditing() {
+  Object.keys(state.editing).forEach(k => state.editing[k] = null);
+  state.transactionDraft = null;
 }
 
-function excelSafeText(value) {
-  const text = String(value ?? "");
-  // 避免 Excel 把以 = + - @ 開頭的內容當成公式。
-  return /^[=+\-@]/.test(text) ? `'${text}` : text;
+function clearBudgetOperationEditing() {
+  state.editing.year = null;
+  state.editing.budgetItem = null;
+  state.editing.budgetContribution = null;
+  state.editing.budgetMovement = null;
 }
 
-function toCsv(rows, headers = null) {
+function activeBudgetOperationMode() {
+  if (state.editing.budgetContribution) return "itemContribution";
+  if (state.editing.budgetMovement) return "movement";
+  if (state.editing.budgetItem) return "item";
+  if (state.editing.year) return "year";
+  return state.budgetOperationMode || "globalContribution";
+}
+
+function budgetOperationTab(mode, label) {
+  const active = activeBudgetOperationMode() === mode ? "active" : "";
+  return `<button class="seg-btn ${active}" type="button" data-budget-operation="${mode}">${escapeHtml(label)}</button>`;
+}
+
+function renderYearSettingsForm(editYear, current) {
+  return `
+    <form id="yearForm" class="form-grid two">
+      <input type="hidden" name="id" value="${escapeHtml(editYear?.id || "")}">
+      ${field("年度", `<input class="input" type="number" name="budget_year" min="2000" max="2100" value="${escapeHtml(editYear?.budget_year || state.selectedBudgetYear)}" required>`)}
+      ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editYear?.name || "")}" placeholder="例：2026 年度預算">`)}
+      ${field("預算模式", `<input class="input" value="提撥紀錄制" disabled><input type="hidden" name="budget_mode" value="monthly_contribution">`)}
+      ${field("年度提撥合計", `<input class="input" value="${escapeHtml(fmtMoney(current.annual_budget || 0))}" disabled><input type="hidden" name="annual_budget" value="${escapeHtml(current.annual_budget || 0)}">`)}
+      ${field("計算起點", `<input class="input" value="依全局提撥紀錄" disabled><input type="hidden" name="budget_start_mode" value="record_start">`)}
+      ${field("前期結轉", `<input class="input" type="number" step="1" name="carryover_from_previous" value="${escapeHtml(editYear?.carryover_from_previous ?? current.carryover_from_previous ?? 0)}">`)}
+      <div class="field wide">
+        <label>備註</label>
+        <textarea class="input" name="note">${escapeHtml(stripGlobalBudgetContributionsMarker(editYear?.note || ""))}</textarea>
+      </div>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">儲存年度</button>
+        <button class="btn secondary" type="button" data-edit-year="${state.selectedYearId}">載入目前年度編輯</button>
+        <button class="btn secondary" type="button" id="closeYearBtn">結轉到下一年</button>
+        ${editYear ? `<button class="btn danger" type="button" data-delete="years:${editYear.id}">刪除年度</button>` : ""}
+        ${editYear ? `<button class="btn secondary" type="button" data-cancel-edit="year">取消編輯</button>` : ""}
+      </div>
+    </form>
+  `;
+}
+
+function renderBudgetItemForm(editItem) {
+  return `
+    <form id="budgetItemForm" class="form-grid two">
+      <input type="hidden" name="id" value="${escapeHtml(editItem?.id || "")}">
+      ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editItem?.name || "")}" required placeholder="例：日常餐飲">`)}
+      ${field("類型", `<select class="input" name="item_type">${selectOpts(["expense","income","saving","other"], editItem?.item_type || "expense")}</select>`)}
+      ${field("金額", `<input class="input" type="number" step="1" name="planned_amount" value="${escapeHtml(editItem?.planned_amount || "")}" required placeholder="固定預算，或每次提撥金額">`)}
+      ${field("分類", `<select class="input" name="category_id">${categoryOptions(editItem?.item_type || "expense", editItem?.category_id || "")}</select>`)}
+      <details class="advanced-fields wide">
+        <summary>進階欄位</summary>
+        <div class="form-grid two">
+          ${field("期間", `<select class="input" name="period_type">${selectOpts(["annual","monthly","weekly","custom"], editItem?.period_type || "annual")}</select>`)}
+          ${field("結轉模式", `<select class="input" name="rollover_mode">${selectOpts(["none","carryover","overspend_to_next"], editItem?.rollover_mode || "none")}</select>`)}
+          ${field("提撥起始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(editItem?.start_date || "")}">`)}
+          ${field("提撥結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(editItem?.end_date || "")}">`)}
+          ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(editItem?.sort_order || 0)}">`)}
+          ${field("啟用", `<select class="input" name="is_active">
+            <option value="true" ${editItem?.is_active !== false ? "selected" : ""}>啟用</option>
+            <option value="false" ${editItem?.is_active === false ? "selected" : ""}>停用</option>
+          </select>`)}
+          <div class="field wide">
+            <label>備註</label>
+            <textarea class="input" name="note">${escapeHtml(editItem?.note || "")}</textarea>
+          </div>
+        </div>
+      </details>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">${editItem ? "儲存修改" : "新增項目"}</button>
+        ${editItem ? `<button class="btn secondary" type="button" data-cancel-edit="budgetItem">取消編輯</button>` : ""}
+      </div>
+    </form>
+  `;
+}
+
+function renderGlobalBudgetContributionForm() {
+  return `
+    <form id="globalBudgetContributionForm" class="form-grid">
+      ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(today())}" required>`)}
+      ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" required placeholder="例：25000">`)}
+      <div class="field wide">
+        <label>備註</label>
+        <textarea class="input" name="note" placeholder="例：5 月稅後收入扣掉儲蓄後可支配預算"></textarea>
+      </div>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">新增全局提撥</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderBudgetContributionForm(edit) {
+  return `
+    <form id="budgetContributionForm" class="form-grid">
+      <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+      ${field("預算項目", `<select class="input" name="budget_item_id" required>${budgetContributionOptions(edit?.budget_item_id || "")}</select>`)}
+      ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(edit?.contribution_date || today())}" required>`)}
+      ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="例：20000">`)}
+      <div class="field wide">
+        <label>備註</label>
+        <textarea class="input" name="note" placeholder="例：出國基金、Live Music 加碼">${escapeHtml(edit?.note || "")}</textarea>
+      </div>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">${edit ? "儲存修改" : "新增項目提撥"}</button>
+        ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetContribution">取消編輯</button>` : ""}
+      </div>
+    </form>
+  `;
+}
+
+function renderBudgetMovementForm(edit) {
+  return `
+    <form id="budgetMovementForm" class="form-grid">
+      <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+      ${field("日期", `<input class="input" type="date" name="movement_date" value="${escapeHtml(edit?.movement_date || today())}" required>`)}
+      ${field("從哪個預算扣", `<select class="input" name="from_budget_item_id" required>${budgetContributionOptions(edit?.from_budget_item_id || "")}</select>`)}
+      ${field("移到哪個預算", `<select class="input" name="to_budget_item_id" required>${budgetContributionOptions(edit?.to_budget_item_id || "")}</select>`)}
+      ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
+      <div class="field wide">
+        <label>備註</label>
+        <textarea class="input" name="note" placeholder="例：月底把日常結餘移到出國">${escapeHtml(edit?.note || "")}</textarea>
+      </div>
+      <div class="wide btn-row">
+        <button class="btn" type="submit">${edit ? "儲存修改" : "新增移轉"}</button>
+        ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetMovement">取消編輯</button>` : ""}
+      </div>
+    </form>
+  `;
+}
+
+function renderBudgetOperationsCard(editYear, editItem, current) {
+  const mode = activeBudgetOperationMode();
+  const titles = {
+    globalContribution: "新增全局預算提撥",
+    itemContribution: state.editing.budgetContribution ? "編輯項目提撥" : "新增項目提撥",
+    movement: state.editing.budgetMovement ? "編輯預算移轉" : "預算項目移轉",
+    item: editItem ? "編輯預算項目" : "新增預算項目",
+    year: "年度基本設定"
+  };
+
+  const desc = {
+    globalContribution: "增加年度母池可用預算。公式：目前可用預算 = 前期結轉 + 全局提撥紀錄合計。",
+    itemContribution: "增加某個 envelope 的額度，例如出國、Live Music、高端餐飲。",
+    movement: "把一個 envelope 的剩餘額度移到另一個 envelope，不會新增收入或支出。",
+    item: "建立或修改 envelope 本身，例如日常花費、出國、Live Music。",
+    year: "低頻設定：年度、名稱、前期結轉、年度刪除與結轉到下一年。"
+  };
+
+  const body = {
+    globalContribution: renderGlobalBudgetContributionForm(),
+    itemContribution: renderBudgetContributionForm(state.editing.budgetContribution),
+    movement: renderBudgetMovementForm(state.editing.budgetMovement),
+    item: renderBudgetItemForm(editItem),
+    year: renderYearSettingsForm(editYear, current)
+  }[mode] || renderGlobalBudgetContributionForm();
+
+  return `
+    <div class="card budget-operation-card">
+      <div class="card-title-row">
+        <h3>預算操作</h3>
+        <span class="badge">${escapeHtml(titles[mode] || "")}</span>
+      </div>
+      <div class="segmented budget-operation-tabs">
+        ${budgetOperationTab("globalContribution", "全局提撥")}
+        ${budgetOperationTab("itemContribution", "項目提撥")}
+        ${budgetOperationTab("movement", "預算移轉")}
+        ${budgetOperationTab("item", "預算項目")}
+        ${budgetOperationTab("year", "年度設定")}
+      </div>
+      <p class="metric-sub">${escapeHtml(desc[mode] || "")}</p>
+      ${body}
+    </div>
+  `;
+}
+
+function renderGlobalBudgetContributionRecords() {
+  const rows = globalBudgetContributionRowsForSelectedYear();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>全局提撥紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderGlobalBudgetContributionTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderBudgetContributionRecords() {
+  const rows = enrichedBudgetContributionsForSelectedYear();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>項目提撥紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetContributionTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderBudgetMovementRecords() {
+  const rows = enrichedBudgetMovementsForSelectedYear();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>預算移轉紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetMovementTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderMonthCloseAdvisor() {
+  const rows = budgetItemSummariesForSelectedYear().filter(i => Number(i.remaining_amount || 0) > 0 && ["monthly","weekly"].includes(i.period_type || ""));
   if (!rows.length) return "";
-  const columns = headers || Object.keys(rows[0]).map(key => ({ key, label: key }));
-  const escape = v => `"${excelSafeText(v).replaceAll('"', '""')}"`;
-  const lines = [
-    columns.map(c => escape(c.label)).join(","),
-    ...rows.map(r => columns.map(c => escape(r[c.key])).join(","))
-  ];
-  return lines.join("\r\n");
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>結餘分配 / 月底處理</span>
+        <span class="badge">手動處理</span>
+      </summary>
+      <div class="collapsible-body">
+        <p class="metric-sub">不自動問、不自動分類。月底或你想整理時，自己從這裡看哪些項目有剩餘，再用「預算移轉」分配到其他項目。</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>預算項目</th><th>剩餘</th><th>建議動作</th></tr></thead>
+            <tbody>${rows.map(r => `
+              <tr><td>${escapeHtml(r.name)}</td><td class="mono good">${fmtMoney(r.remaining_amount)}</td><td>可移轉到出國、證券戶、Live Music 或保留。</td></tr>
+            `).join("")}</tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+  `;
 }
 
-function downloadFile(filename, content, mime = "text/plain;charset=utf-8", options = {}) {
-  const finalContent = options.bom ? "\uFEFF" + content : content;
-  const blob = new Blob([finalContent], { type: mime });
+function renderAnnualRolloverCard() {
+  const rows = budgetItemSummariesForSelectedYear().filter(budgetIsAnnualRolloverMode);
+  if (!rows.length) return "";
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>年度結轉型項目</span>
+        <span class="badge">${rows.length} 項</span>
+      </summary>
+      <div class="collapsible-body">
+        <p class="metric-sub">這些項目不需要跳到下一年才能處理；你可以直接按「結帳」讓主畫面實際歸 0，剩餘銀彈承接，歷史仍保留在項目明細。</p>
+        ${renderBudgetItemTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+async function ensureBudgetYearForNumber(yearNumber) {
+  let year = state.data.years.find(y => Number(y.budget_year) === Number(yearNumber));
+  if (year) return year;
+  year = await upsert("years", {
+    budget_year: Number(yearNumber),
+    name: `${yearNumber} 年度預算`,
+    annual_budget: 0,
+    monthly_budget: 0,
+    budget_mode: "monthly_contribution",
+    budget_start_mode: "record_start",
+    carryover_from_previous: 0,
+    note: ""
+  }, { expect: { budget_year: Number(yearNumber) } });
+  await loadAll();
+  return year;
+}
+
+function renderBudgetContributionSection() {
+  const edit = state.editing.budgetContribution;
+  const rows = enrichedBudgetContributionsForSelectedYear();
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>${edit ? "編輯預算提撥" : "新增預算提撥"}</h3>
+        <span class="badge">${rows.length} 筆</span>
+      </div>
+      <p class="metric-sub">提撥型預算項目會優先使用這裡的實際提撥紀錄；若沒有紀錄，才用「金額 × 期間次數」估算。</p>
+      <form id="budgetContributionForm" class="form-grid">
+        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+        ${field("預算項目", `<select class="input" name="budget_item_id" required>${budgetContributionOptions(edit?.budget_item_id || "")}</select>`)}
+        ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(edit?.contribution_date || today())}" required>`)}
+        ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required placeholder="例：20000">`)}
+        <div class="field wide">
+          <label>備註</label>
+          <textarea class="input" name="note" placeholder="例：出國基金、Live Music 加碼">${escapeHtml(edit?.note || "")}</textarea>
+        </div>
+        <div class="wide btn-row">
+          <button class="btn" type="submit">${edit ? "儲存修改" : "新增提撥"}</button>
+          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetContribution">取消編輯</button>` : ""}
+        </div>
+      </form>
+    </div>
+
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>提撥紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetContributionTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderGlobalBudgetContributionSection() {
+  const rows = globalBudgetContributionRowsForSelectedYear();
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>新增全局預算提撥</h3>
+        <span class="badge">年度母池</span>
+      </div>
+      <p class="metric-sub">全局年度預算現在以實際提撥紀錄為準。公式：目前可用預算 = 前期結轉 + 全局提撥紀錄合計。</p>
+      <form id="globalBudgetContributionForm" class="form-grid">
+        ${field("提撥日期", `<input class="input" type="date" name="contribution_date" value="${escapeHtml(today())}" required>`)}
+        ${field("提撥金額", `<input class="input" type="number" step="1" name="amount" required placeholder="例：25000">`)}
+        <div class="field wide">
+          <label>備註</label>
+          <textarea class="input" name="note" placeholder="例：5 月稅後收入扣掉儲蓄後可支配預算"></textarea>
+        </div>
+        <div class="wide btn-row">
+          <button class="btn" type="submit">新增全局提撥</button>
+        </div>
+      </form>
+    </div>
+
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>全局提撥紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderGlobalBudgetContributionTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderGlobalBudgetContributionTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無全局提撥紀錄。</div>`;
+  const mobileCards = `
+    <div class="mobile-card-list">
+      ${rows.slice(0, 80).map(r => `
+        <div class="mobile-data-card">
+          <div class="mobile-data-head">
+            <div>
+              <strong>全局預算提撥</strong>
+              <span>${escapeHtml(r.contribution_date || "")}</span>
+            </div>
+            <div class="mobile-amount">${fmtMoney(r.amount)}</div>
+          </div>
+          <div class="mobile-data-meta">${r.note ? `<span>${escapeHtml(r.note)}</span>` : ""}</div>
+          <div class="mobile-card-actions">
+            <button type="button" class="btn small danger" data-delete-global-contribution="${escapeHtml(r.id)}">刪除</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
+
+  const tableView = `
+    <div class="table-wrap desktop-table">
+      <table>
+        <thead><tr><th>日期</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
+        <tbody>${rows.slice(0, 120).map(r => `
+          <tr>
+            <td>${escapeHtml(r.contribution_date || "")}</td>
+            <td class="mono good">${fmtMoney(r.amount)}</td>
+            <td>${escapeHtml(r.note || "")}</td>
+            <td class="actions">
+              <button type="button" class="btn small danger" data-delete-global-contribution="${escapeHtml(r.id)}">刪除</button>
+            </td>
+          </tr>`).join("")}</tbody>
+      </table>
+    </div>`;
+  return `${mobileCards}${tableView}`;
+}
+
+function budgetContributionOptions(selected = "") {
+  const items = state.data.budgetItems.filter(b => b.year_id === state.selectedYearId && b.is_active !== false);
+  return `<option value="">請選擇預算項目</option>` + items.map(b => `<option value="${escapeHtml(b.id)}" ${b.id === selected ? "selected" : ""}>${escapeHtml(b.name)}</option>`).join("");
+}
+
+function enrichedBudgetContributionsForSelectedYear() {
+  const itemMap = Object.fromEntries(state.data.budgetItems.map(i => [i.id, i]));
+  return (state.data.budgetContributions || [])
+    .filter(c => contributionYear(c.contribution_date) === Number(state.selectedBudgetYear))
+    .map(c => ({ ...c, budget_item_name: itemMap[c.budget_item_id]?.name || "未知項目" }))
+    .sort((a, b) => String(b.contribution_date).localeCompare(String(a.contribution_date)));
+}
+
+function renderBudgetContributionTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無提撥紀錄。</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>日期</th><th>預算項目</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr>
+            <td>${escapeHtml(r.contribution_date)}</td>
+            <td>${escapeHtml(r.budget_item_name)}</td>
+            <td class="mono good">${fmtMoney(r.amount)}</td>
+            <td>${escapeHtml(r.note || "")}</td>
+            <td class="actions">
+              <button class="btn small secondary" data-edit-contribution="${escapeHtml(r.id)}">編輯</button>
+              <button class="btn small danger" data-delete="budget_contributions:${escapeHtml(r.id)}">刪除</button>
+            </td>
+          </tr>
+        `).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderBudgetMovementSection() {
+  const edit = state.editing.budgetMovement;
+  const rows = enrichedBudgetMovementsForSelectedYear();
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>${edit ? "編輯預算移轉" : "預算項目移轉"}</h3>
+        <span class="badge">手動分配</span>
+      </div>
+      <p class="metric-sub">用於把未花完的預算，從一個項目移到另一個項目。例如日常花費 → 證券戶 / 出國 / Live Music。</p>
+      <form id="budgetMovementForm" class="form-grid">
+        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+        ${field("日期", `<input class="input" type="date" name="movement_date" value="${escapeHtml(edit?.movement_date || today())}" required>`)}
+        ${field("從哪個預算扣", `<select class="input" name="from_budget_item_id" required>${budgetContributionOptions(edit?.from_budget_item_id || "")}</select>`)}
+        ${field("移到哪個預算", `<select class="input" name="to_budget_item_id" required>${budgetContributionOptions(edit?.to_budget_item_id || "")}</select>`)}
+        ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
+        <div class="field wide">
+          <label>備註</label>
+          <textarea class="input" name="note" placeholder="例：月底把日常結餘移到出國">${escapeHtml(edit?.note || "")}</textarea>
+        </div>
+        <div class="wide btn-row">
+          <button class="btn" type="submit">${edit ? "儲存修改" : "新增移轉"}</button>
+          ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="budgetMovement">取消編輯</button>` : ""}
+        </div>
+      </form>
+    </div>
+
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>預算移轉紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetMovementTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function enrichedBudgetMovementsForSelectedYear() {
+  const itemMap = Object.fromEntries(state.data.budgetItems.map(i => [i.id, i]));
+  return (state.data.budgetMovements || [])
+    .filter(m => contributionYear(m.movement_date) === Number(state.selectedBudgetYear))
+    .map(m => ({
+      ...m,
+      from_name: itemMap[m.from_budget_item_id]?.name || "未知項目",
+      to_name: itemMap[m.to_budget_item_id]?.name || "未知項目"
+    }))
+    .sort((a, b) => String(b.movement_date).localeCompare(String(a.movement_date)));
+}
+
+function renderBudgetMovementTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無預算移轉紀錄。</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>日期</th><th>從</th><th>到</th><th>金額</th><th>備註</th><th>操作</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr>
+            <td>${escapeHtml(r.movement_date)}</td>
+            <td>${escapeHtml(r.from_name)}</td>
+            <td>${escapeHtml(r.to_name)}</td>
+            <td class="mono">${fmtMoney(r.amount)}</td>
+            <td>${escapeHtml(r.note || "")}</td>
+            <td class="actions">
+              <button class="btn small secondary" data-edit-movement="${escapeHtml(r.id)}">編輯</button>
+              <button class="btn small danger" data-delete="budget_movements:${escapeHtml(r.id)}">刪除</button>
+            </td>
+          </tr>
+        `).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderAccounts() {
+  const edit = state.editing.account;
+  const rows = state.data.accounts;
+  return `
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>${edit ? "編輯帳戶" : "新增帳戶"}</h3>
+        <form id="accountForm" class="form-grid">
+          <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+          ${field("名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：現金、國泰銀行、信用卡">`)}
+          ${field("類型", `<select class="input" name="type">${selectOpts(["cash","bank","e_wallet","credit_card","loan","asset","other"], edit?.type || "cash")}</select>`)}
+          ${field("幣別", `<input class="input" name="currency" value="${escapeHtml(edit?.currency || "TWD")}">`)}
+          ${field("期初餘額", `<input class="input" type="number" step="1" name="initial_balance" value="${escapeHtml(edit?.initial_balance ?? 0)}">`)}
+          ${field("顏色", `<select class="input" name="color">${colorOptions(edit?.color || "#64748b")}</select>`)}
+          ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(edit?.sort_order || 0)}">`)}
+          ${field("狀態", `<select class="input" name="is_active"><option value="true" ${edit?.is_active !== false ? "selected" : ""}>啟用</option><option value="false" ${edit?.is_active === false ? "selected" : ""}>停用</option></select>`)}
+          ${field("預算驗算", accountCoverageSelect(accountCoverageMode(edit?.note || "")))}
+          <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(stripAccountCoverageMarker(edit?.note || ""))}</textarea></div>
+          <div class="wide btn-row"><button class="btn" type="submit">${edit ? "儲存修改" : "新增帳戶"}</button>${edit ? `<button class="btn secondary" type="button" data-cancel-edit="account">取消編輯</button>` : ""}</div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="card-title-row"><h3>帳戶列表</h3><span class="badge">${rows.length} 個</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>名稱</th><th>類型</th><th>餘額</th><th>預算驗算</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody>${accountBalanceRowsMerged().map(a => `
+              <tr>
+                <td>${escapeHtml(a.name)}</td><td>${escapeHtml(labelOf(a.type))}</td><td class="mono">${fmtMoney(a.current_balance)}</td><td>${escapeHtml(accountCoverageLabel(accountCoverageMode(a.note || "")))}</td><td>${a.is_active === false ? "停用" : "啟用"}</td>
+                <td class="actions"><button class="btn small secondary" data-edit-account="${escapeHtml(a.id)}">編輯</button><button class="btn small danger" data-delete="accounts:${escapeHtml(a.id)}">刪除</button></td>
+              </tr>`).join("")}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function accountBalanceRowsMerged() {
+  const balanceMap = Object.fromEntries(state.data.accountBalances.map(a => [a.id, a]));
+  return state.data.accounts.map(a => ({ ...a, current_balance: balanceMap[a.id]?.current_balance ?? a.initial_balance ?? 0 }));
+}
+
+function renderCategories() {
+  const editCat = state.editing.category;
+  const editTag = state.editing.tag;
+  return `
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>${editCat ? "編輯分類" : "新增分類"}</h3>
+        <form id="categoryForm" class="form-grid">
+          <input type="hidden" name="id" value="${escapeHtml(editCat?.id || "")}">
+          ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editCat?.name || "")}" required>`)}
+          ${field("類型", `<select class="input" name="type">${selectOpts(["expense","income","other"], editCat?.type || "expense")}</select>`)}
+          ${field("父分類", `<select class="input" name="parent_id">${optionList(state.data.categories.filter(c => c.id !== editCat?.id), editCat?.parent_id || "", "name", "id", "無")}</select>`)}
+          ${field("顏色", `<select class="input" name="color">${colorOptions(editCat?.color || "#64748b")}</select>`)}
+          ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(editCat?.sort_order || 0)}">`)}
+          ${field("狀態", `<select class="input" name="is_active"><option value="true" ${editCat?.is_active !== false ? "selected" : ""}>啟用</option><option value="false" ${editCat?.is_active === false ? "selected" : ""}>停用</option></select>`)}
+          <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(editCat?.note || "")}</textarea></div>
+          <div class="wide btn-row"><button class="btn" type="submit">${editCat ? "儲存分類" : "新增分類"}</button>${editCat ? `<button class="btn secondary" type="button" data-cancel-edit="category">取消編輯</button>` : ""}</div>
+        </form>
+      </div>
+      <div class="card">
+        <h3>${editTag ? "編輯標籤" : "新增標籤"}</h3>
+        <form id="tagForm" class="form-grid">
+          <input type="hidden" name="id" value="${escapeHtml(editTag?.id || "")}">
+          ${field("名稱", `<input class="input" name="name" value="${escapeHtml(editTag?.name || "")}" required>`)}
+          ${field("顏色", `<select class="input" name="color">${colorOptions(editTag?.color || "#64748b")}</select>`)}
+          <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(editTag?.note || "")}</textarea></div>
+          <div class="wide btn-row"><button class="btn" type="submit">${editTag ? "儲存標籤" : "新增標籤"}</button>${editTag ? `<button class="btn secondary" type="button" data-cancel-edit="tag">取消編輯</button>` : ""}</div>
+        </form>
+      </div>
+    </div>
+
+    <div class="grid cols-2">
+      <div class="card">
+        <div class="card-title-row"><h3>分類列表</h3><span class="badge">${state.data.categories.length} 個</span></div>
+        <div class="table-wrap"><table><thead><tr><th>名稱</th><th>類型</th><th>顏色</th><th>狀態</th><th>操作</th></tr></thead><tbody>
+          ${state.data.categories.map(c => `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(labelOf(c.type))}</td><td>${colorDot(c.color)}</td><td>${c.is_active === false ? "停用" : "啟用"}</td><td class="actions"><button class="btn small secondary" data-edit-category="${escapeHtml(c.id)}">編輯</button><button class="btn small danger" data-delete="categories:${escapeHtml(c.id)}">刪除</button></td></tr>`).join("")}
+        </tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-title-row"><h3>標籤列表</h3><span class="badge">${state.data.tags.length} 個</span></div>
+        <div class="table-wrap"><table><thead><tr><th>名稱</th><th>顏色</th><th>操作</th></tr></thead><tbody>
+          ${state.data.tags.map(t => `<tr><td>${escapeHtml(t.name)}</td><td>${colorDot(t.color)}</td><td class="actions"><button class="btn small secondary" data-edit-tag="${escapeHtml(t.id)}">編輯</button><button class="btn small danger" data-delete="tags:${escapeHtml(t.id)}">刪除</button></td></tr>`).join("")}
+        </tbody></table></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRecurring() {
+  const edit = state.editing.recurring;
+  const type = edit?.type || state.draftRecurringType || "expense";
+  const rows = state.data.recurring;
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>${edit ? "編輯訂閱 / 固定扣款" : "新增訂閱 / 固定扣款"}</h3>
+        <span class="badge">v14 驗證版</span>
+      </div>
+      ${edit ? "" : `<div class="segmented">${["expense","income"].map(m => `<button type="button" class="seg-btn ${m === type ? "active" : ""}" data-recurring-type="${m}">${escapeHtml(labelOf(m))}</button>`).join("")}</div>`}
+      <form id="recurringForm" class="form-grid two" data-current-type="${escapeHtml(type)}">
+        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+        <input type="hidden" name="type" value="${escapeHtml(type)}">
+        ${field("名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：Netflix、Apple TV、房租">`)}
+        ${field(type === "income" ? "入帳帳戶" : "付款帳戶", `<select class="input" name="account_id" required>${accountOptions(edit?.account_id || defaultAccountIdFor(type))}</select>`)}
+        ${field("分類", `<select class="input" name="category_id">${categoryOptions(type, edit?.category_id || "")}</select>`)}
+        ${field("預算項目", `<select class="input" name="budget_item_id">${budgetOptions(edit?.budget_item_id || "")}</select>`)}
+        ${field("金額", `<input class="input" type="number" step="1" name="amount" value="${escapeHtml(edit?.amount || "")}" required>`)}
+        ${field("頻率", `<select class="input" name="frequency">${selectOpts(["weekly","monthly","quarterly","yearly"], edit?.frequency || "monthly")}</select>`)}
+        ${field("間隔", `<input class="input" type="number" name="interval_count" value="${escapeHtml(edit?.interval_count || 1)}" min="1">`)}
+        ${field("下次扣款日", `<input class="input" type="date" name="next_due_date" value="${escapeHtml(edit?.next_due_date || today())}" required>`)}
+        ${field("商家", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}">`)}
+        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}">`)}
+        ${field("提醒天數", `<input class="input" type="number" name="reminder_days" value="${escapeHtml(edit?.reminder_days || 3)}">`)}
+        ${field("自動建立交易", `<select class="input" name="auto_create_transaction"><option value="false" ${edit?.auto_create_transaction ? "" : "selected"}>否</option><option value="true" ${edit?.auto_create_transaction ? "selected" : ""}>是</option></select>`)}
+        ${field("狀態", `<select class="input" name="is_active"><option value="true" ${edit?.is_active !== false ? "selected" : ""}>使用中</option><option value="false" ${edit?.is_active === false ? "selected" : ""}>已取消 / 停用</option></select>`)}
+        <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(edit?.note || "")}</textarea></div>
+        <div class="wide btn-row"><button class="btn" type="submit">${edit ? "儲存修改" : "新增訂閱"}</button>${edit ? `<button class="btn secondary" type="button" data-cancel-edit="recurring">取消編輯</button>` : ""}</div>
+      </form>
+    </div>
+
+    <details class="card collapsible-card" open>
+      <summary class="collapsible-summary">
+        <span>訂閱 / 固定扣款列表</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderRecurringTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderRecurringTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無訂閱。若剛按新增仍看到這行，代表資料庫寫入失敗或權限未開。</div>`;
+  const accountMap = Object.fromEntries(state.data.accounts.map(a => [a.id, a.name]));
+  const catMap = Object.fromEntries(state.data.categories.map(c => [c.id, c.name]));
+  return `<div class="table-wrap"><table><thead><tr><th>名稱</th><th>類型</th><th>金額</th><th>帳戶</th><th>分類</th><th>週期</th><th>下次扣款</th><th>狀態</th><th>操作</th></tr></thead><tbody>
+    ${rows.map(r => `<tr>
+      <td><strong>${escapeHtml(r.name)}</strong>${r.merchant ? `<br><small>${escapeHtml(r.merchant)}</small>` : ""}</td>
+      <td>${typeBadge(r.type)}</td>
+      <td class="mono ${r.type === "income" ? "good" : "bad"}">${fmtMoney(r.amount)}</td>
+      <td>${escapeHtml(accountMap[r.account_id] || "")}</td>
+      <td>${escapeHtml(catMap[r.category_id] || "")}</td>
+      <td>${escapeHtml(labelOf(r.frequency))} / ${escapeHtml(r.interval_count || 1)}</td>
+      <td>${escapeHtml(r.next_due_date || "")}</td>
+      <td>${r.is_active === false ? "已取消 / 停用" : "使用中"}</td>
+      <td class="actions"><button class="btn small secondary" data-edit-recurring="${escapeHtml(r.id)}">編輯</button><button class="btn small danger" data-delete="recurring_transactions:${escapeHtml(r.id)}">刪除</button></td>
+    </tr>`).join("")}
+  </tbody></table></div>`;
+}
+
+function renderTemplates() {
+  const edit = state.editing.quickTemplate;
+  const rows = state.data.quickTemplates;
+  return `
+    <div class="card">
+      <div class="card-title-row">
+        <h3>${edit ? "編輯快速模板" : "新增快速模板"}</h3>
+        <span class="badge">快速記一筆</span>
+      </div>
+      <p class="metric-sub">自訂模板會顯示在「記一筆」頁的快捷按鈕列。內建模板不可直接刪除；若想完全自訂，請先匯入預設模板再編輯。</p>
+      <form id="quickTemplateForm" class="form-grid two">
+        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+        ${field("名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required placeholder="例：早餐、OpenAI、Live Music">`)}
+        ${field("類型", `<select class="input" name="type">${selectOpts(["expense","income","transfer","refund"], edit?.type || "expense")}</select>`)}
+        ${field("預設帳戶", `<select class="input" name="default_account_id">${accountOptions(edit?.default_account_id || "")}</select>`)}
+        ${field("預設轉入帳戶", `<select class="input" name="default_to_account_id">${accountOptions(edit?.default_to_account_id || "")}</select>`)}
+        ${field("分類", `<select class="input" name="category_id">${categoryOptions(edit?.type || "expense", edit?.category_id || "")}</select>`)}
+        ${field("預算項目", `<select class="input" name="budget_item_id">${budgetOptions(edit?.budget_item_id || "")}</select>`)}
+        ${field("商家 / 對象", `<input class="input" name="merchant" value="${escapeHtml(edit?.merchant || "")}">`)}
+        ${field("預設金額", `<input class="input" type="number" step="1" name="default_amount" value="${escapeHtml(edit?.default_amount || "")}">`)}
+        ${field("付款方式", `<input class="input" name="payment_method" value="${escapeHtml(edit?.payment_method || "")}">`)}
+        ${field("必要程度", `<select class="input" name="necessity_level">${selectOpts(["survival","quality","luxury","investment","other"], edit?.necessity_level || "quality")}</select>`)}
+        ${field("現金流性質", `<select class="input" name="cashflow_nature">${selectOpts(["fixed","variable","one_time"], edit?.cashflow_nature || "variable")}</select>`)}
+        ${field("排序", `<input class="input" type="number" name="sort_order" value="${escapeHtml(edit?.sort_order || 0)}">`)}
+        ${field("啟用", `<select class="input" name="is_active"><option value="true" ${edit?.is_active !== false ? "selected" : ""}>啟用</option><option value="false" ${edit?.is_active === false ? "selected" : ""}>停用</option></select>`)}
+        <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(edit?.note || "")}</textarea></div>
+        <div class="wide btn-row"><button class="btn" type="submit">${edit ? "儲存修改" : "新增模板"}</button>${edit ? `<button class="btn secondary" type="button" data-cancel-edit="quickTemplate">取消編輯</button>` : ""}<button class="btn secondary" type="button" id="importDefaultTemplatesBtn">匯入預設模板</button></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-title-row"><h3>自訂快速模板</h3><span class="badge">${rows.length} 筆</span></div>
+      ${renderTemplateTable(rows)}
+    </div>
+  `;
+}
+
+function renderTemplateTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無自訂模板。你仍可使用系統內建模板。</div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>名稱</th><th>類型</th><th>商家</th><th>金額</th><th>狀態</th><th>操作</th></tr></thead><tbody>
+    ${rows.map(t => `<tr><td>${escapeHtml(t.name)}</td><td>${escapeHtml(labelOf(t.type))}</td><td>${escapeHtml(t.merchant || "")}</td><td>${t.default_amount ? fmtMoney(t.default_amount) : ""}</td><td>${t.is_active === false ? "停用" : "啟用"}</td><td class="actions"><button class="btn small secondary" data-edit-template="${escapeHtml(t.id)}">編輯</button><button class="btn small danger" data-delete="quick_templates:${escapeHtml(t.id)}">刪除</button></td></tr>`).join("")}
+  </tbody></table></div>`;
+}
+
+async function importDefaultTemplates() {
+  const ok = await confirmAction("匯入預設模板", "這會把目前的內建模板複製成可編輯的自訂模板。若已存在同名模板，可能會重複。確定匯入？");
+  if (!ok) return;
+  const rows = fallbackQuickTemplates.map((t, idx) => ({
+    name: t.name,
+    type: t.type,
+    default_account_id: resolveTemplateAccount(t.type, t.accountTypes || []) || null,
+    category_id: findByNames(state.data.categories, t.categoryNames || [])?.id || null,
+    budget_item_id: findByNames(state.data.budgetItems.filter(b => b.year_id === state.selectedYearId), t.budgetNames || [])?.id || null,
+    merchant: t.merchant || t.name,
+    default_amount: null,
+    payment_method: null,
+    necessity_level: t.necessity_level || "quality",
+    cashflow_nature: t.cashflow_nature || "variable",
+    control_level: "controllable",
+    sort_order: idx,
+    is_active: true,
+    note: "由內建模板匯入"
+  }));
+  for (const row of rows) await upsert("quick_templates", row, { expect: { name: row.name, type: row.type } });
+  await loadAll();
+  render();
+  showAlert(`已匯入 ${rows.length} 個預設模板。`, "good");
+}
+
+function renderCreditLoans() {
+  const cardEdit = state.editing.creditCard;
+  const loanEdit = state.editing.loan;
+  return `
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>${cardEdit ? "編輯信用卡" : "新增信用卡"}</h3>
+        <form id="creditCardForm" class="form-grid">
+          <input type="hidden" name="id" value="${escapeHtml(cardEdit?.id || "")}">
+          ${field("名稱", `<input class="input" name="name" value="${escapeHtml(cardEdit?.name || "")}" required>`)}
+          ${field("連結帳戶", `<select class="input" name="account_id">${accountOptions(cardEdit?.account_id || "")}</select>`)}
+          ${field("發卡機構", `<input class="input" name="issuer" value="${escapeHtml(cardEdit?.issuer || "")}">`)}
+          ${field("卡別", `<input class="input" name="card_network" value="${escapeHtml(cardEdit?.card_network || "")}" placeholder="Visa / Mastercard">`)}
+          ${field("信用額度", `<input class="input" type="number" name="credit_limit" value="${escapeHtml(cardEdit?.credit_limit || 0)}">`)}
+          ${field("結帳日", `<input class="input" type="number" name="statement_day" value="${escapeHtml(cardEdit?.statement_day || "")}" min="1" max="31">`)}
+          ${field("繳款日", `<input class="input" type="number" name="payment_due_day" value="${escapeHtml(cardEdit?.payment_due_day || "")}" min="1" max="31">`)}
+          ${field("年費", `<input class="input" type="number" name="annual_fee" value="${escapeHtml(cardEdit?.annual_fee || 0)}">`)}
+          ${field("回饋類型", `<select class="input" name="reward_type">${selectOpts(["cashback","points","miles","other"], cardEdit?.reward_type || "cashback")}</select>`)}
+          ${field("回饋率 %", `<input class="input" type="number" step="0.01" name="reward_rate" value="${escapeHtml(cardEdit?.reward_rate || "")}">`)}
+          ${field("狀態", `<select class="input" name="is_active"><option value="true" ${cardEdit?.is_active !== false ? "selected" : ""}>啟用</option><option value="false" ${cardEdit?.is_active === false ? "selected" : ""}>停用</option></select>`)}
+          <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(cardEdit?.note || "")}</textarea></div>
+          <div class="wide btn-row"><button class="btn" type="submit">${cardEdit ? "儲存信用卡" : "新增信用卡"}</button>${cardEdit ? `<button class="btn secondary" type="button" data-cancel-edit="creditCard">取消編輯</button>` : ""}</div>
+        </form>
+      </div>
+      <div class="card">
+        <h3>${loanEdit ? "編輯貸款" : "新增貸款"}</h3>
+        <form id="loanForm" class="form-grid">
+          <input type="hidden" name="id" value="${escapeHtml(loanEdit?.id || "")}">
+          ${field("名稱", `<input class="input" name="name" value="${escapeHtml(loanEdit?.name || "")}" required>`)}
+          ${field("連結帳戶", `<select class="input" name="account_id">${accountOptions(loanEdit?.account_id || "")}</select>`)}
+          ${field("類型", `<select class="input" name="loan_type">${selectOpts(["student_loan","personal_loan","mortgage","car_loan","credit_card_debt","installment","other"], loanEdit?.loan_type || "personal_loan")}</select>`)}
+          ${field("本金", `<input class="input" type="number" name="principal_amount" value="${escapeHtml(loanEdit?.principal_amount || 0)}">`)}
+          ${field("目前餘額", `<input class="input" type="number" name="current_balance" value="${escapeHtml(loanEdit?.current_balance || 0)}">`)}
+          ${field("利率 %", `<input class="input" type="number" step="0.01" name="interest_rate" value="${escapeHtml(loanEdit?.interest_rate || "")}">`)}
+          ${field("月付金", `<input class="input" type="number" name="monthly_payment" value="${escapeHtml(loanEdit?.monthly_payment || 0)}">`)}
+          ${field("付款日", `<input class="input" type="number" name="payment_day" min="1" max="31" value="${escapeHtml(loanEdit?.payment_day || "")}">`)}
+          ${field("開始日", `<input class="input" type="date" name="start_date" value="${escapeHtml(loanEdit?.start_date || "")}">`)}
+          ${field("結束日", `<input class="input" type="date" name="end_date" value="${escapeHtml(loanEdit?.end_date || "")}">`)}
+          ${field("狀態", `<select class="input" name="status">${selectOpts(["active","paused","paid_off"], loanEdit?.status || "active")}</select>`)}
+          <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(loanEdit?.note || "")}</textarea></div>
+          <div class="wide btn-row"><button class="btn" type="submit">${loanEdit ? "儲存貸款" : "新增貸款"}</button>${loanEdit ? `<button class="btn secondary" type="button" data-cancel-edit="loan">取消編輯</button>` : ""}</div>
+        </form>
+      </div>
+    </div>
+
+    <div class="grid cols-2">
+      <div class="card"><div class="card-title-row"><h3>信用卡</h3><span class="badge">${state.data.creditCards.length} 張</span></div>${renderSimpleTable(state.data.creditCards, ["name","issuer","credit_limit","statement_day","payment_due_day"], "credit_cards", "card")}</div>
+      <div class="card"><div class="card-title-row"><h3>貸款</h3><span class="badge">${state.data.loans.length} 筆</span></div>${renderLoanTable()}</div>
+    </div>
+  `;
+}
+
+function renderSimpleTable(rows, keys, table, editKey) {
+  if (!rows.length) return `<div class="empty">尚無資料</div>`;
+  return `<div class="table-wrap"><table><thead><tr>${keys.map(k => `<th>${escapeHtml(k)}</th>`).join("")}<th>操作</th></tr></thead><tbody>${rows.map(r => `<tr>${keys.map(k => `<td>${typeof r[k] === "number" ? fmtMoney(r[k]) : escapeHtml(r[k] || "")}</td>`).join("")}<td class="actions"><button class="btn small secondary" data-edit-${editKey}="${escapeHtml(r.id)}">編輯</button><button class="btn small danger" data-delete="${table}:${escapeHtml(r.id)}">刪除</button></td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function renderLoanTable() {
+  if (!state.data.loans.length) return `<div class="empty">尚無貸款</div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>名稱</th><th>類型</th><th>餘額</th><th>月付金</th><th>狀態</th><th>操作</th></tr></thead><tbody>${state.data.loans.map(l => `<tr><td>${escapeHtml(l.name)}</td><td>${escapeHtml(labelOf(l.loan_type))}</td><td>${fmtMoney(l.current_balance)}</td><td>${fmtMoney(l.monthly_payment)}</td><td>${escapeHtml(labelOf(l.status))}</td><td class="actions"><button class="btn small secondary" data-edit-loan="${escapeHtml(l.id)}">編輯</button><button class="btn small danger" data-delete="loans:${escapeHtml(l.id)}">刪除</button></td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function renderGoals() {
+  const edit = state.editing.goal;
+  const rows = state.data.goals;
+  return `
+    <div class="card">
+      <h3>${edit ? "編輯目標" : "新增目標"}</h3>
+      <form id="goalForm" class="form-grid two">
+        <input type="hidden" name="id" value="${escapeHtml(edit?.id || "")}">
+        ${field("名稱", `<input class="input" name="name" value="${escapeHtml(edit?.name || "")}" required>`)}
+        ${field("類型", `<select class="input" name="goal_type">${selectOpts(["saving","debt_reduction","travel","emergency_fund","purchase","other"], edit?.goal_type || "saving")}</select>`)}
+        ${field("目標金額", `<input class="input" type="number" name="target_amount" value="${escapeHtml(edit?.target_amount || 0)}" required>`)}
+        ${field("目前金額", `<input class="input" type="number" name="current_amount" value="${escapeHtml(edit?.current_amount || 0)}">`)}
+        ${field("目標日期", `<input class="input" type="date" name="target_date" value="${escapeHtml(edit?.target_date || "")}">`)}
+        ${field("優先級", `<input class="input" type="number" name="priority" value="${escapeHtml(edit?.priority || 0)}">`)}
+        ${field("狀態", `<select class="input" name="status">${selectOpts(["active","paused","completed"], edit?.status || "active")}</select>`)}
+        <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(edit?.note || "")}</textarea></div>
+        <div class="wide btn-row"><button class="btn" type="submit">${edit ? "儲存目標" : "新增目標"}</button>${edit ? `<button class="btn secondary" type="button" data-cancel-edit="goal">取消編輯</button>` : ""}</div>
+      </form>
+    </div>
+
+    <div class="grid cols-2">
+      ${rows.map(g => {
+        const pct = g.target_amount ? Math.min(100, Number(g.current_amount || 0) / Number(g.target_amount) * 100) : 0;
+        return `<div class="card"><div class="card-title-row"><h3>${escapeHtml(g.name)}</h3><span class="badge">${escapeHtml(labelOf(g.goal_type))}</span></div><div class="metric-value">${fmtMoney(g.current_amount)} / ${fmtMoney(g.target_amount)}</div><div class="progress"><span style="width:${pct}%"></span></div><p class="metric-sub">${fmtNumber(pct,1)}%｜目標日 ${escapeHtml(g.target_date || "未設定")}</p><div class="btn-row"><button class="btn small secondary" data-edit-goal="${escapeHtml(g.id)}">編輯</button><button class="btn small danger" data-delete="goals:${escapeHtml(g.id)}">刪除</button></div></div>`;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderSettings() {
+  return `
+    ${renderDatabaseStatusCard()}
+
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>連線設定</h3>
+        <p class="metric-sub">狀態已整合為「資料庫狀態」：連線、最後讀取、最後寫入。不要再分開看 Supabase / 後端 / 資料庫。</p>
+        <p class="metric-sub">若讀不到資料，先確認：已在資料庫編輯器執行結構檔，且沒有直接開啟列層級安全規則導致缺少存取規則。</p>
+      </div>
+      <div class="card">
+        <h3>資料匯出</h3>
+        <p class="metric-sub">可匯出流水帳 CSV、現金流量表 CSV，或完整 Excel .xlsx 工作簿。</p>
+        <div class="btn-row">
+          <button class="btn secondary" id="exportCsvBtn">匯出流水帳 CSV</button>
+          <button class="btn secondary" id="exportCashflowCsvBtn">匯出現金流量表 CSV</button>
+          <button class="btn secondary" id="exportXlsxBtn">匯出 Excel .xlsx</button>
+          <button class="btn secondary" id="rebuildEntriesBtn">重建分錄</button>
+          <button class="btn secondary" id="downloadJsonBtn">下載暫存資料</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>預設常用帳戶</h3>
+      <p class="metric-sub">手機快速記帳會優先帶入這些帳戶。設定存在本機瀏覽器，不會寫入資料庫。</p>
+      <form id="preferencesForm" class="form-grid two">
+        ${field("支出預設帳戶", `<select class="input" name="default_account_expense">${accountOptions(defaultAccountIdFor("expense"))}</select>`)}
+        ${field("收入預設帳戶", `<select class="input" name="default_account_income">${accountOptions(defaultAccountIdFor("income"))}</select>`)}
+        ${field("轉帳預設轉出帳戶", `<select class="input" name="default_account_transfer">${accountOptions(defaultAccountIdFor("transfer"))}</select>`)}
+        ${field("退款預設帳戶", `<select class="input" name="default_account_refund">${accountOptions(defaultAccountIdFor("refund"))}</select>`)}
+        <div class="wide btn-row">
+          <button class="btn" type="submit">儲存偏好</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>重要限制</h3>
+      <p class="metric-sub">
+        這版沒有 登入驗證 / 列層級安全規則，適合單人測試或非敏感資料。若要公開長期使用，應改成 登入驗證與列層級安全規則。
+      </p>
+    </div>
+  `;
+}
+
+function renderCategoryChart() {
+  const rows = state.data.categorySpending.filter(r => Number(r.year) === Number(state.selectedBudgetYear)).slice(0, 8);
+  if (!rows.length) return `<div class="empty">尚無分類支出資料</div>`;
+  const max = Math.max(...rows.map(r => Number(r.expense_amount || 0)), 1);
+  return `<div class="chart-list">${rows.map(r => `<div><div class="card-title-row"><span>${escapeHtml(r.category_name || "未分類")}</span><strong>${fmtMoney(r.expense_amount)}</strong></div><div class="mini-progress"><span style="width:${Number(r.expense_amount || 0) / max * 100}%"></span></div></div>`).join("")}</div>`;
+}
+
+function renderMonthlyChart() {
+  const rows = state.data.monthlyCashflow.filter(r => Number(r.year) === Number(state.selectedBudgetYear));
+  if (!rows.length) return `<div class="empty">尚無月度資料</div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>月份</th><th>收入</th><th>支出</th><th>淨額</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.month)}</td><td class="good">${fmtMoney(r.income_amount)}</td><td class="bad">${fmtMoney(r.expense_amount)}</td><td>${fmtMoney(r.net_amount)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function renderTAccountTable() {
+  const rows = state.data.transactionEntries
+    .filter(e => Number(String(e.entry_date || "").slice(0, 4)) === Number(state.selectedBudgetYear))
+    .sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)));
+  if (!rows.length) return `<div class="empty">尚無分錄。可在設定頁按「重建分錄」。</div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>日期</th><th>借貸</th><th>科目</th><th>金額</th><th>備註</th></tr></thead><tbody>${rows.slice(0, 120).map(e => `<tr><td>${escapeHtml(e.entry_date)}</td><td>${e.side === "debit" ? "借" : "貸"}</td><td>${escapeHtml(e.label || e.entry_type)}</td><td class="mono">${fmtMoney(e.amount)}</td><td>${escapeHtml(e.note || "")}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function renderTAccountCards() {
+  const rows = state.data.transactionEntries
+    .filter(e => Number(String(e.entry_date || "").slice(0, 4)) === Number(state.selectedBudgetYear));
+  if (!rows.length) return `<div class="empty">尚無分錄。可在設定頁按「重建分錄」。</div>`;
+  const map = new Map();
+  rows.forEach(e => {
+    const key = e.label || e.entry_type || "未命名科目";
+    if (!map.has(key)) map.set(key, { label: key, debit: [], credit: [] });
+    map.get(key)[e.side === "debit" ? "debit" : "credit"].push(e);
+  });
+  return `<div class="t-account-grid">${Array.from(map.values()).slice(0, 16).map(group => {
+    const debitTotal = group.debit.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const creditTotal = group.credit.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    return `<div class="t-account-card"><div class="card-title-row"><h4>${escapeHtml(group.label)}</h4><span class="badge">差餘 ${fmtMoney(debitTotal - creditTotal)}</span></div><div class="t-columns"><div><strong>借方</strong>${group.debit.slice(0, 8).map(e => `<p>${escapeHtml(e.note || "")} <b>${fmtMoney(e.amount)}</b><br><small>${escapeHtml(e.entry_date)}</small></p>`).join("") || "—"}</div><div><strong>貸方</strong>${group.credit.slice(0, 8).map(e => `<p>${escapeHtml(e.note || "")} <b>${fmtMoney(e.amount)}</b><br><small>${escapeHtml(e.entry_date)}</small></p>`).join("") || "—"}</div></div><div class="card-title-row"><small>借方合計 ${fmtMoney(debitTotal)}</small><small>貸方合計 ${fmtMoney(creditTotal)}</small></div></div>`;
+  }).join("")}</div>`;
+}
+
+function renderFinancialSignals() {
+  const s = getCurrentYearSummary();
+  const items = budgetItemSummariesForSelectedYear();
+  const over = items.filter(i => Number(i.remaining_amount || 0) < 0);
+  const highUse = items.filter(i => Number(i.usage_pct || 0) >= 80 && Number(i.remaining_amount || 0) >= 0);
+  const cash = Number(s.net_cashflow || 0);
+  const notes = [];
+  if (cash < 0) notes.push(`今年淨現金流為 ${fmtMoney(cash)}，代表支出高於收入。`);
+  if (over.length) notes.push(`${over.length} 個預算項目已超支：${over.map(o => o.name).join("、")}。`);
+  if (highUse.length) notes.push(`${highUse.length} 個預算項目使用率超過 80%。`);
+  if (!notes.length) notes.push("目前沒有明顯預算警訊。仍需定期檢查訂閱與一次性支出。");
+  return `<ul class="signal-list">${notes.map(n => `<li>${escapeHtml(n)}</li>`).join("")}</ul>`;
+}
+
+function renderMobileMore() {
+  const pages = [
+    ["accounts", "帳戶", "現金、銀行、信用卡"],
+    ["categories", "分類 / 標籤", "管理分類與標籤"],
+    ["recurring", "訂閱管理", "固定扣款與取消狀態"],
+    ["creditLoans", "信用卡 / 貸款", "債務與帳單資訊"],
+    ["goals", "目標", "儲蓄與還債"],
+    ["templates", "模板管理", "快速記帳模板"],
+    ["settings", "設定", "匯出與連線狀態"]
+  ];
+  return `<div class="mobile-more-grid">${pages.map(([tab, title, sub]) => `<button class="mobile-more-card" type="button" data-go="${tab}"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(sub)}</span></button>`).join("")}</div>`;
+}
+
+function download(filename, text, type = "application/json") {
+  const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -6551,148 +5064,90 @@ function downloadFile(filename, content, mime = "text/plain;charset=utf-8", opti
   URL.revokeObjectURL(url);
 }
 
-function transactionExportRows(rows) {
-  return rows.map(t => ({
-    date: t.transaction_date || "",
-    type: labelOf(t.type),
-    amount: Number(t.amount || 0),
-    account: t.account_name || "",
-    to_account: t.to_account_name || "",
-    category: t.category_name || "",
-    budget_item: t.budget_item_name || "",
-    merchant: t.merchant || "",
-    payment_method: t.payment_method || "",
-    necessity_level: labelOf(t.necessity_level),
-    cashflow_nature: labelOf(t.cashflow_nature),
-    status: labelOf(t.status),
-    note: t.note || "",
-    tx_year: t.tx_year || "",
-    tx_month: t.tx_month || "",
-    created_at: t.created_at || "",
-    updated_at: t.updated_at || ""
-  }));
+function downloadCacheJson() {
+  download(`accounting-cache-${today()}.json`, JSON.stringify(state.data, null, 2));
 }
 
-function exportCurrentYearCsv() {
-  const rows = transactionExportRows(applyTxFilters(transactionsForSelectedYear()));
-  const headers = [
-    { key: "date", label: "日期" },
-    { key: "type", label: "類型" },
-    { key: "amount", label: "金額" },
-    { key: "account", label: "帳戶" },
-    { key: "to_account", label: "轉入帳戶" },
-    { key: "category", label: "分類" },
-    { key: "budget_item", label: "預算項目" },
-    { key: "merchant", label: "商家 / 對象" },
-    { key: "payment_method", label: "付款方式" },
-    { key: "necessity_level", label: "必要程度" },
-    { key: "cashflow_nature", label: "現金流性質" },
-    { key: "status", label: "狀態" },
-    { key: "note", label: "備註" },
-    { key: "tx_year", label: "年度" },
-    { key: "tx_month", label: "月份" },
-    { key: "created_at", label: "建立時間" },
-    { key: "updated_at", label: "更新時間" }
+function csvEscape(value) {
+  const s = String(value ?? "");
+  if (/[",\n\r]/.test(s)) return `"${s.replaceAll('"', '""')}"`;
+  return s;
+}
+
+function toCsv(rows) {
+  const body = rows.map(row => row.map(csvEscape).join(",")).join("\r\n");
+  return "\ufeff" + body;
+}
+
+function transactionExportRows() {
+  return [["日期","類型","金額","帳戶","轉入帳戶","分類","預算項目","商家","付款方式","必要程度","現金流性質","狀態","備註"],
+    ...transactionsForSelectedYear().map(t => [
+      t.transaction_date,
+      labelOf(t.type),
+      t.amount,
+      t.account_name || "",
+      t.to_account_name || "",
+      t.category_name || "",
+      t.budget_item_name || "",
+      t.merchant || "",
+      t.payment_method || "",
+      labelOf(t.necessity_level),
+      labelOf(t.cashflow_nature),
+      labelOf(t.status),
+      t.note || ""
+    ])
   ];
-  downloadFile(`流水帳_${state.selectedBudgetYear}_Excel_UTF8.csv`, toCsv(rows, headers), "text/csv;charset=utf-8", { bom: true });
-  showAlert("已匯出流水帳 CSV。中文亂碼已用 UTF-8 BOM 修正。", "good");
+}
+
+function exportTransactionsCsv() {
+  download(`流水帳-${state.selectedBudgetYear}.csv`, toCsv(transactionExportRows()), "text/csv;charset=utf-8");
+  showAlert("已匯出流水帳 CSV。", "good");
 }
 
 function addAmount(map, key, amount) {
-  const safeKey = key || "未分類";
-  map.set(safeKey, Number(map.get(safeKey) || 0) + Number(amount || 0));
+  map.set(key, (map.get(key) || 0) + Number(amount || 0));
 }
 
 function mapToSortedRows(map) {
-  return Array.from(map.entries())
-    .map(([name, amount]) => ({ name, amount: Number(amount || 0) }))
-    .filter(r => Math.abs(r.amount) > 0)
-    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  return Array.from(map.entries()).map(([name, amount]) => ({ name, amount })).sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
 }
 
 function cashflowStatementRows() {
-  const rows = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
-  const incomeByCategory = new Map();
-  const expenseByCategory = new Map();
-  const transferByPurpose = new Map();
-
-  rows.forEach(t => {
-    const amount = Number(t.amount || 0);
-    if (t.type === "income") {
-      addAmount(incomeByCategory, t.category_name || "收入", amount);
-    } else if (t.type === "expense") {
-      addAmount(expenseByCategory, t.category_name || "未分類支出", amount);
-    } else if (t.type === "refund") {
-      // 退款抵減原支出，放在支出端用負數呈現。
-      addAmount(expenseByCategory, t.category_name || "退款", -amount);
-    } else if (t.type === "transfer") {
-      const purpose = t.merchant || `${t.account_name || "轉出帳戶"} → ${t.to_account_name || "轉入帳戶"}`;
-      addAmount(transferByPurpose, purpose, amount);
-    }
+  const tx = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
+  const incomeMap = new Map();
+  const expenseMap = new Map();
+  const transferMap = new Map();
+  tx.forEach(t => {
+    if (t.type === "income") addAmount(incomeMap, t.category_name || "收入", Number(t.amount || 0));
+    if (t.type === "expense") addAmount(expenseMap, t.category_name || "未分類支出", -Number(t.amount || 0));
+    if (t.type === "refund") addAmount(expenseMap, `${t.category_name || "未分類支出"}｜退款`, Number(t.amount || 0));
+    if (t.type === "transfer") addAmount(transferMap, `${t.account_name || "轉出"} → ${t.to_account_name || "轉入"}`, Number(t.amount || 0));
   });
-
-  const incomeRows = mapToSortedRows(incomeByCategory);
-  const expenseRows = mapToSortedRows(expenseByCategory);
-  const transferRows = mapToSortedRows(transferByPurpose);
-
+  const rows = [];
+  const incomeRows = mapToSortedRows(incomeMap);
+  const expenseRows = mapToSortedRows(expenseMap);
+  const transferRows = mapToSortedRows(transferMap);
   const totalIncome = incomeRows.reduce((sum, r) => sum + r.amount, 0);
-  const netExpense = expenseRows.reduce((sum, r) => sum + r.amount, 0);
-  const netCashflow = totalIncome - netExpense;
-  const savingsRate = totalIncome > 0 ? netCashflow / totalIncome : null;
-  const totalTransfers = transferRows.reduce((sum, r) => sum + r.amount, 0);
-
-  const out = [];
-  const push = (section, item, amount = "", note = "", ratio = "") => {
-    out.push({ section, item, amount, ratio, note });
-  };
-  const blank = () => push("", "", "", "", "");
-
-  push("個人現金流量表", `${state.selectedBudgetYear} 年度`, "", "", "");
-  push("產生時間", new Date().toLocaleString("zh-TW"), "", "", "");
-  push("口徑說明", "收入與支出採直接法；轉帳只列備查，不影響收入、支出、儲蓄率。", "", "", "");
-  blank();
-
-  push("一、現金流入", "收入合計", totalIncome, "", totalIncome ? "100%" : "");
-  incomeRows.forEach(r => push("收入明細", r.name, r.amount, "", totalIncome ? `${fmtNumber(r.amount / totalIncome * 100, 1)}%` : ""));
-  blank();
-
-  push("二、生活現金流出", "淨支出合計（支出 − 退款）", -netExpense, "現金流出以負數呈現", totalIncome ? `${fmtNumber(netExpense / totalIncome * 100, 1)}% of income` : "");
-  expenseRows.forEach(r => {
-    const amount = -r.amount;
-    const note = r.amount < 0 ? "退款淨流入" : "";
-    push("支出明細", r.name, amount, note, totalIncome ? `${fmtNumber(r.amount / totalIncome * 100, 1)}% of income` : "");
-  });
-  blank();
-
-  push("三、自由現金流", "收入 − 淨支出", netCashflow, "", totalIncome ? `${fmtNumber(savingsRate * 100, 1)}%` : "N/A");
-  push("三、自由現金流", "儲蓄率", savingsRate === null ? "N/A" : `${fmtNumber(savingsRate * 100, 1)}%`, "(收入 − 淨支出) / 收入", "");
-  blank();
-
-  push("四、轉帳 / 資金配置（備查）", "轉帳總額", totalTransfers, "銀行、信用卡、證券戶、電子支付之間的資金移動；不列入損益。", "");
-  transferRows.forEach(r => push("轉帳明細", r.name, r.amount, "備查，不影響淨現金流", ""));
-  blank();
-
-  const current = getCurrentYearSummary();
-  push("五、預算摘要", "年度可用預算", Number(current.available_budget || 0), "", "");
-  push("五、預算摘要", "年度已用預算", -Number(current.actual_expense || 0), "", "");
-  push("五、預算摘要", "年度剩餘預算", Number(current.remaining_budget || 0), "", "");
-  push("五、預算摘要", "預算使用率", `${fmtNumber(current.budget_used_pct || 0, 1)}%`, "", "");
-  return out;
+  const totalExpense = expenseRows.reduce((sum, r) => sum + r.amount, 0);
+  const freeCashflow = totalIncome + totalExpense;
+  rows.push({ section: "營運現金流", item: "收入合計", amount: totalIncome, ratio: totalIncome ? "100%" : "N/A", note: "收入類交易" });
+  incomeRows.forEach(r => rows.push({ section: "收入明細", item: r.name, amount: r.amount, ratio: totalIncome ? `${fmtNumber(r.amount / totalIncome * 100, 1)}%` : "N/A", note: "" }));
+  rows.push({ section: "營運現金流", item: "支出合計（扣退款）", amount: totalExpense, ratio: totalIncome ? `${fmtNumber(Math.abs(totalExpense) / totalIncome * 100, 1)}% of income` : "N/A", note: "支出為負數，退款為正數" });
+  expenseRows.forEach(r => rows.push({ section: "支出明細", item: r.name, amount: r.amount, ratio: totalExpense ? `${fmtNumber(Math.abs(r.amount) / Math.abs(totalExpense) * 100, 1)}%` : "N/A", note: "" }));
+  rows.push({ section: "自由現金流", item: "收入 - 淨支出", amount: freeCashflow, ratio: totalIncome ? `${fmtNumber(freeCashflow / totalIncome * 100, 1)}%` : "N/A", note: "不含轉帳" });
+  transferRows.forEach(r => rows.push({ section: "轉帳備查", item: r.name, amount: r.amount, ratio: "", note: "轉帳不計入自由現金流" }));
+  const budget = getCurrentYearSummary();
+  rows.push({ section: "預算摘要", item: "可用預算", amount: budget.available_budget, ratio: "", note: "年度預算 + 前期結轉" });
+  rows.push({ section: "預算摘要", item: "已用預算", amount: -budget.actual_expense, ratio: `${fmtNumber(budget.budget_used_pct, 1)}%`, note: "支出扣退款" });
+  rows.push({ section: "預算摘要", item: "剩餘預算", amount: budget.remaining_budget, ratio: "", note: "" });
+  return rows;
 }
 
-function exportCashflowStatementCsv() {
-  const rows = cashflowStatementRows();
-  const headers = [
-    { key: "section", label: "區塊" },
-    { key: "item", label: "項目" },
-    { key: "amount", label: "金額" },
-    { key: "ratio", label: "比例" },
-    { key: "note", label: "備註" }
-  ];
-  downloadFile(`現金流量表_${state.selectedBudgetYear}_Excel_UTF8.csv`, toCsv(rows, headers), "text/csv;charset=utf-8", { bom: true });
-  showAlert("已匯出現金流量表 CSV。支出以負數呈現，轉帳只列備查，不影響儲蓄率。", "good");
+function exportCashflowCsv() {
+  const rows = [["區塊","項目","金額","比例","備註"], ...cashflowStatementRows().map(r => [r.section, r.item, r.amount, r.ratio, r.note])];
+  download(`現金流量表-${state.selectedBudgetYear}.csv`, toCsv(rows), "text/csv;charset=utf-8");
+  showAlert("已匯出現金流量表 CSV。", "good");
 }
-
 
 function xmlEscape(value) {
   return String(value ?? "")
@@ -6715,107 +5170,80 @@ function columnName(index) {
 
 function sheetXml(rows) {
   const sheetData = rows.map((row, rIdx) => {
-    const cells = row.map((value, cIdx) => {
-      const cellRef = `${columnName(cIdx)}${rIdx + 1}`;
-      if (typeof value === "number" && Number.isFinite(value)) {
-        return `<c r="${cellRef}"><v>${value}</v></c>`;
+    const cells = row.map((cell, cIdx) => {
+      const ref = `${columnName(cIdx)}${rIdx + 1}`;
+      if (typeof cell === "number" && Number.isFinite(cell)) {
+        return `<c r="${ref}"><v>${cell}</v></c>`;
       }
-      return `<c r="${cellRef}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`;
+      return `<c r="${ref}" t="inlineStr"><is><t>${xmlEscape(cell)}</t></is></c>`;
     }).join("");
     return `<row r="${rIdx + 1}">${cells}</row>`;
   }).join("");
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetData}</sheetData></worksheet>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetData}</sheetData></worksheet>`;
 }
 
-function utf8Bytes(str) {
-  return new TextEncoder().encode(str);
-}
-
-function crc32(bytes) {
-  let c = ~0;
-  for (let i = 0; i < bytes.length; i++) {
-    c ^= bytes[i];
-    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xEDB88320 & -(c & 1));
-  }
-  return ~c >>> 0;
-}
-
-function writeUInt32LE(arr, value) {
-  arr.push(value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255);
-}
-
-function writeUInt16LE(arr, value) {
-  arr.push(value & 255, (value >>> 8) & 255);
-}
-
-function makeXlsxZip(files) {
-  const chunks = [];
-  const central = [];
+async function zipStore(files) {
+  const encoder = new TextEncoder();
+  const fileRecords = [];
   let offset = 0;
+  const chunks = [];
 
-  files.forEach(file => {
-    const nameBytes = utf8Bytes(file.name);
-    const dataBytes = utf8Bytes(file.content);
-    const crc = crc32(dataBytes);
-    const local = [];
-    writeUInt32LE(local, 0x04034b50);
-    writeUInt16LE(local, 20); writeUInt16LE(local, 0); writeUInt16LE(local, 0);
-    writeUInt16LE(local, 0); writeUInt16LE(local, 0);
-    writeUInt32LE(local, crc);
-    writeUInt32LE(local, dataBytes.length);
-    writeUInt32LE(local, dataBytes.length);
-    writeUInt16LE(local, nameBytes.length);
-    writeUInt16LE(local, 0);
-    chunks.push(new Uint8Array(local), nameBytes, dataBytes);
+  const crcTable = (() => {
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      table[i] = c >>> 0;
+    }
+    return table;
+  })();
 
-    const c = [];
-    writeUInt32LE(c, 0x02014b50);
-    writeUInt16LE(c, 20); writeUInt16LE(c, 20);
-    writeUInt16LE(c, 0); writeUInt16LE(c, 0); writeUInt16LE(c, 0); writeUInt16LE(c, 0);
-    writeUInt32LE(c, crc);
-    writeUInt32LE(c, dataBytes.length);
-    writeUInt32LE(c, dataBytes.length);
-    writeUInt16LE(c, nameBytes.length);
-    writeUInt16LE(c, 0); writeUInt16LE(c, 0); writeUInt16LE(c, 0); writeUInt16LE(c, 0);
-    writeUInt32LE(c, 0); writeUInt32LE(c, offset);
-    central.push(new Uint8Array(c), nameBytes);
-    offset += local.length + nameBytes.length + dataBytes.length;
-  });
+  const crc32 = bytes => {
+    let crc = 0xffffffff;
+    bytes.forEach(b => { crc = crcTable[(crc ^ b) & 0xff] ^ (crc >>> 8); });
+    return (crc ^ 0xffffffff) >>> 0;
+  };
 
-  const centralSize = central.reduce((sum, part) => sum + part.length, 0);
-  const end = [];
-  writeUInt32LE(end, 0x06054b50);
-  writeUInt16LE(end, 0); writeUInt16LE(end, 0);
-  writeUInt16LE(end, files.length); writeUInt16LE(end, files.length);
-  writeUInt32LE(end, centralSize);
-  writeUInt32LE(end, offset);
-  writeUInt16LE(end, 0);
+  const u16 = n => new Uint8Array([n & 255, (n >>> 8) & 255]);
+  const u32 = n => new Uint8Array([n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]);
+  const concat = parts => {
+    const len = parts.reduce((sum, p) => sum + p.length, 0);
+    const out = new Uint8Array(len);
+    let pos = 0;
+    parts.forEach(p => { out.set(p, pos); pos += p.length; });
+    return out;
+  };
 
-  return new Blob([...chunks, ...central, new Uint8Array(end)], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-  });
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const data = encoder.encode(file.content);
+    const crc = crc32(data);
+    const local = concat([
+      u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), nameBytes, data
+    ]);
+    chunks.push(local);
+    fileRecords.push({ ...file, nameBytes, data, crc, offset });
+    offset += local.length;
+  }
+
+  const centralStart = offset;
+  const central = fileRecords.map(file => concat([
+    u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(file.crc), u32(file.data.length), u32(file.data.length), u16(file.nameBytes.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(file.offset), file.nameBytes
+  ]));
+  chunks.push(...central);
+  const centralSize = central.reduce((sum, p) => sum + p.length, 0);
+  chunks.push(concat([u32(0x06054b50), u16(0), u16(0), u16(fileRecords.length), u16(fileRecords.length), u32(centralSize), u32(centralStart), u16(0)]));
+  return new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 
-function exportWorkbookXlsx() {
-  const txRows = transactionExportRows(transactionsForSelectedYear()).map(r => [
-    r.date, r.type, r.amount, r.account, r.to_account, r.category, r.budget_item, r.merchant,
-    r.payment_method, r.necessity_level, r.cashflow_nature, r.status, r.note
-  ]);
-  const budgetRows = budgetItemSummariesForSelectedYear().map(r => [
-    r.name, labelOf(r.item_type), r.category_name, r.is_contribution_mode ? "提撥型" : "固定型",
-    Number(r.current_budget_amount || 0), Number(r.actual_amount || 0), Number(r.remaining_amount || 0),
-    Number(r.used_pct || 0), r.funding_label
-  ]);
-  const contributionRows = enrichedBudgetContributionsForSelectedYear().map(r => [
-    r.contribution_date, r.budget_item_name, Number(r.amount || 0), r.note || ""
-  ]);
-  const movementRows = enrichedBudgetMovementsForSelectedYear().map(r => [
-    r.movement_date, r.from_name, r.to_name, Number(r.amount || 0), r.note || ""
-  ]);
-  const entryRows = (state.data.transactionEntries || []).map(e => [
-    e.entry_date, e.side === "debit" ? "借方" : "貸方", e.label || "", Number(e.amount || 0), e.note || ""
-  ]);
+async function exportWorkbookXlsx() {
+  const txRows = transactionExportRows().slice(1);
+  const budgetRows = budgetItemSummariesForSelectedYear().map(i => [i.name, labelOf(i.item_type), i.category_name || "", labelOf(i.period_type), i.current_budget_amount, i.actual_amount, i.remaining_amount, `${fmtNumber(i.usage_pct, 1)}%`, i.budget_formula]);
+  const contributionRows = enrichedBudgetContributionsForSelectedYear().map(r => [r.contribution_date, r.budget_item_name, r.amount, r.note || ""]);
+  const movementRows = enrichedBudgetMovementsForSelectedYear().map(r => [r.movement_date, r.from_name, r.to_name, r.amount, r.note || ""]);
+  const entryRows = state.data.transactionEntries
+    .filter(e => Number(String(e.entry_date || "").slice(0, 4)) === Number(state.selectedBudgetYear))
+    .map(e => [e.entry_date, e.side === "debit" ? "借" : "貸", e.label || e.entry_type, e.amount, e.note || ""]);
   const cashflowRows = cashflowStatementRows().map(r => [r.section, r.item, r.amount, r.ratio, r.note]);
   const categoryExpenseRows = categoryExpenseReportRows().map(r => [r.category, Number(r.amount || 0), `${fmtNumber(r.share * 100, 1)}%`, Number(r.count || 0), Number(r.avg || 0), Number(r.max || 0)]);
   const recurringRows = recurringReportRows().map(r => [r.name, Number(r.monthly || 0), Number(r.annual || 0), r.account, r.category, r.frequency, r.next_due_date, r.status]);
@@ -6839,57 +5267,65 @@ function exportWorkbookXlsx() {
     { name: "分錄", rows: [["日期","借貸","科目","金額","備註"], ...entryRows] }
   ];
 
+  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((s, i) => `<sheet name="${xmlEscape(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets></workbook>`;
+  const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}</Relationships>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>`;
+  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+
   const files = [
-    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>` },
-    { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
-    { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((s, i) => `<sheet name="${xmlEscape(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets></workbook>` },
-    { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}</Relationships>` },
+    { name: "[Content_Types].xml", content: contentTypes },
+    { name: "_rels/.rels", content: rootRels },
+    { name: "xl/workbook.xml", content: workbookXml },
+    { name: "xl/_rels/workbook.xml.rels", content: relsXml },
     ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, content: sheetXml(s.rows) }))
   ];
-
-  const blob = makeXlsxZip(files);
+  const blob = await zipStore(files);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `個人財務_${state.selectedBudgetYear}.xlsx`;
+  a.download = `個人記帳-${state.selectedBudgetYear}.xlsx`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-  showAlert("已匯出 Excel .xlsx 工作簿。", "good");
+  showAlert("已匯出 Excel .xlsx。", "good");
 }
 
-function downloadCacheJson() {
-  downloadFile(`accounting_cache_${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(state.data, null, 2), "application/json;charset=utf-8");
+function confirmAction(title, message) {
+  const dialog = $("#confirmDialog");
+  $("#confirmTitle").textContent = title;
+  $("#confirmMessage").textContent = message;
+  dialog.showModal();
+  return new Promise(resolve => {
+    const ok = $("#confirmOkBtn");
+    const cancel = $("#confirmCancelBtn");
+    const cleanup = value => {
+      ok.onclick = null;
+      cancel.onclick = null;
+      dialog.close();
+      resolve(value);
+    };
+    ok.onclick = () => cleanup(true);
+    cancel.onclick = () => cleanup(false);
+  });
 }
 
 async function init() {
-  if (!window.supabase || !window.APP_CONFIG) {
-    setConnection(false, "前端套件未載入");
-    showAlert("資料庫前端套件或設定檔未載入。請確認網路與檔案路徑。", "bad");
+  if (!window.APP_CONFIG?.supabaseUrl || !window.APP_CONFIG?.supabaseAnonKey) {
+    showAlert("缺少 Supabase 設定。請編輯 config.js。", "bad");
     return;
   }
-
-  state.client = window.supabase.createClient(APP_CONFIG.SUPABASE_URL, APP_CONFIG.SUPABASE_ANON_KEY);
-
-  $$(".nav-btn").forEach(btn => btn.addEventListener("click", () => setPage(btn.dataset.tab)));
-  $("#refreshBtn").addEventListener("click", async () => {
-    await loadAll();
-    render();
-  });
-
-  $("#mobileQuickAdd")?.addEventListener("click", () => setPage("transactions"));
-  $("#exportBtn").addEventListener("click", exportCurrentYearCsv);
+  state.client = supabase.createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabaseAnonKey);
+  $("#refreshBtn").addEventListener("click", async () => { await loadAll(); render(); });
+  $("#exportBtn").addEventListener("click", exportTransactionsCsv);
   $("#yearSelect").addEventListener("change", e => {
     state.selectedYearId = e.target.value;
-    const y = state.data.years.find(row => row.id === state.selectedYearId);
-    state.selectedBudgetYear = y ? y.budget_year : new Date().getFullYear();
-    clearEditing();
+    const y = state.data.years.find(row => row.id === e.target.value);
+    state.selectedBudgetYear = y?.budget_year || state.selectedBudgetYear;
     render();
   });
-
   await loadAll();
-  setPage("overview");
+  render();
 }
 
-document.addEventListener("DOMContentLoaded", init);
+init();
