@@ -1,4 +1,4 @@
-// v59 hotfix：補回總覽需要的預算進度清單 helper，並相容舊 Supabase schema。
+// v59 hotfix：補回總覽需要的預算進度清單 helper、相容舊 Supabase schema、補回主選單點擊。
 // 這個檔案必須在 script.js 前載入。
 
 (function patchSupabaseMissingViews() {
@@ -32,6 +32,32 @@
   };
 
   window.supabase.__bookeepV59Patched = true;
+})();
+
+(function patchMainNavClick() {
+  window.addEventListener("DOMContentLoaded", () => {
+    const bind = () => {
+      if (typeof window.setPage !== "function" && typeof setPage !== "function") return false;
+      document.querySelectorAll(".nav-btn[data-tab]").forEach(btn => {
+        if (btn.dataset.hotfixBound === "true") return;
+        btn.dataset.hotfixBound = "true";
+        btn.addEventListener("click", () => {
+          const tab = btn.dataset.tab;
+          if (!tab) return;
+          if (typeof window.setPage === "function") window.setPage(tab);
+          else setPage(tab);
+        });
+      });
+      return true;
+    };
+
+    if (bind()) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      if (bind() || tries >= 20) clearInterval(timer);
+    }, 100);
+  });
 })();
 
 function normalizeTransactionDetail(t) {
