@@ -1,4 +1,4 @@
-// v59 hotfix：補回總覽需要的預算進度清單 helper、相容舊 Supabase schema、補回主選單點擊。
+// v59 hotfix：補回缺失 helper、相容舊 Supabase schema、補回主選單點擊。
 // 這個檔案必須在 script.js 前載入。
 
 (function patchSupabaseMissingViews() {
@@ -75,6 +75,26 @@ function normalizeTransactionDetail(t) {
     tags: t.tags || "",
     status: t.status || "cleared"
   };
+}
+
+function renderAnalyticsSummaryCards() {
+  const s = getCurrentYearSummary();
+  const monthly = getMonthlyAnalyticsRows();
+  const latestMonth = [...monthly].reverse().find(r => r.income || r.expense) || monthly[monthly.length - 1] || {};
+  const healthRows = getHealthRows();
+  const luxury = healthRows.find(r => r.key === "luxury")?.amount || 0;
+  const expense = Number(s.actual_expense || 0);
+  const luxuryPct = expense ? luxury / expense * 100 : 0;
+  const savingRate = Number(latestMonth.income || 0) ? (Number(latestMonth.income || 0) - Number(latestMonth.expense || 0)) / Number(latestMonth.income || 0) * 100 : null;
+
+  return `
+    <div class="grid cols-4">
+      ${metricCard("年度淨現金流", fmtMoney(s.net_cashflow), "收入 − 淨支出", Number(s.net_cashflow || 0) >= 0 ? "good" : "bad")}
+      ${metricCard("預算使用率", `${fmtNumber(s.budget_used_pct, 1)}%`, `已用 ${fmtMoney(s.actual_expense)}`, Number(s.budget_used_pct || 0) <= 100 ? "good" : "bad")}
+      ${metricCard("最近月份儲蓄率", savingRate === null ? "N/A" : `${fmtNumber(savingRate, 1)}%`, latestMonth.label || "尚無月份資料", savingRate === null ? "" : savingRate >= 0 ? "good" : "bad")}
+      ${metricCard("奢侈娛樂占比", `${fmtNumber(luxuryPct, 1)}%`, `金額 ${fmtMoney(luxury)}`, luxuryPct <= 30 ? "" : "warn")}
+    </div>
+  `;
 }
 
 function renderBudgetProgressList(limit = 8) {
