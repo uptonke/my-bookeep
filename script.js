@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v60-full";
+const APP_VERSION = "v60-full-close-records-close-records";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -1919,6 +1919,79 @@ function enrichedBudgetContributionsForSelectedYear() {
     .sort((a, b) => String(b.contribution_date || "").localeCompare(String(a.contribution_date || "")) || String(b.created_at || "").localeCompare(String(a.created_at || "")));
 }
 
+
+function isCloseContributionRow(row) {
+  return String(row.note || "").trim().startsWith("[CLOSE]");
+}
+
+function closeContributionRowsForSelectedYear() {
+  return enrichedBudgetContributionsForSelectedYear().filter(isCloseContributionRow);
+}
+
+function manualBudgetContributionRowsForSelectedYear() {
+  return enrichedBudgetContributionsForSelectedYear().filter(r => !isCloseContributionRow(r));
+}
+
+function renderBudgetCloseRecords() {
+  const rows = closeContributionRowsForSelectedYear();
+  return `
+    <details class="card collapsible-card">
+      <summary class="collapsible-summary">
+        <span>結帳紀錄（點擊展開 / 收合）</span>
+        <span class="badge">${rows.length} 筆</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetCloseTable(rows)}
+      </div>
+    </details>
+  `;
+}
+
+function renderBudgetCloseTable(rows) {
+  if (!rows.length) return `<div class="empty">尚無結帳紀錄。按預算項目的「結帳」後，會在這裡留下紀錄。</div>`;
+
+  const mobileCards = `
+    <div class="mobile-card-list">
+      ${rows.slice(0, 80).map(r => `
+        <div class="mobile-data-card">
+          <div class="mobile-data-head">
+            <div>
+              <strong>${escapeHtml(r.budget_item_name)}</strong>
+              <span>${escapeHtml(r.contribution_date || "")}</span>
+            </div>
+            <div class="mobile-amount">${fmtMoney(r.amount)}</div>
+          </div>
+          <div class="mobile-data-meta">
+            <span>結帳承接銀彈</span>
+            ${r.note ? `<span>${escapeHtml(String(r.note || "").replace("[CLOSE]", "").trim())}</span>` : ""}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  const tableView = `
+    <div class="table-wrap desktop-table">
+      <table>
+        <thead><tr><th>日期</th><th>預算項目</th><th>承接銀彈</th><th>備註</th></tr></thead>
+        <tbody>
+          ${rows.slice(0, 120).map(r => `
+            <tr>
+              <td>${escapeHtml(r.contribution_date || "")}</td>
+              <td>${escapeHtml(r.budget_item_name)}</td>
+              <td class="mono good">${fmtMoney(r.amount)}</td>
+              <td>${escapeHtml(String(r.note || "").replace("[CLOSE]", "").trim())}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  return `${mobileCards}${tableView}`;
+}
+
+
 function renderBudgetContributionSection(items) {
   const edit = state.editing.budgetContribution;
   const rows = enrichedBudgetContributionsForSelectedYear();
@@ -2950,7 +3023,9 @@ function renderGlobalBudgetContributionRecords() {
 }
 
 function renderBudgetContributionRecords() {
-  const rows = enrichedBudgetContributionsForSelectedYear();
+  const rows = typeof manualBudgetContributionRowsForSelectedYear === "function"
+    ? manualBudgetContributionRowsForSelectedYear()
+    : enrichedBudgetContributionsForSelectedYear();
   return `
     <details class="card collapsible-card">
       <summary class="collapsible-summary">
@@ -3015,6 +3090,8 @@ function renderBudget() {
     ${renderGlobalBudgetContributionRecords()}
 
     ${renderBudgetContributionRecords()}
+
+    ${renderBudgetCloseRecords()}
 
     ${renderBudgetMovementRecords()}
   `;

@@ -51,3 +51,11 @@
 ## 注意
 
 如果資料庫真的缺少 `quick_templates.to_account_id`，這版會用 note marker 備援保存轉入帳戶。長期乾淨做法仍是補欄位，可執行本包的 `migration_v60_full_optional.sql`。
+
+
+## v60-full-close-records 修正
+
+- 新增「結帳紀錄（點擊展開 / 收合）」區塊。
+- 預算項目按「結帳」後產生的 `[CLOSE]` 提撥紀錄，現在會獨立顯示在「結帳紀錄」。
+- 「項目提撥紀錄」會排除 `[CLOSE]` 結帳承接資料，避免混在一般手動提撥紀錄裡。
+- 不需要跑 SQL；結帳紀錄沿用既有 `budget_contributions.note` 的 `[CLOSE]` 標記。
