@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v60-full-close-records-close-records";
+const APP_VERSION = "v63-mpc-mps-integrated";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -16,6 +16,9 @@ const state = {
   draftTxType: "expense",
   draftRecurringType: "expense",
   budgetOperationMode: "globalContribution",
+  budgetItemFilter: "all",
+  budgetRecordMode: "global",
+  reportHealthMode: "overview",
   reportChartMode: "categoryExpense",
   reportChartKind: "bar",
   reportChartExpanded: false,
@@ -1330,6 +1333,16 @@ function render() {
   $$("[data-budget-operation]").forEach(btn => btn.addEventListener("click", () => {
     clearBudgetOperationEditing();
     state.budgetOperationMode = btn.dataset.budgetOperation || "globalContribution";
+    render();
+  }));
+
+  $$("[data-budget-item-filter]").forEach(btn => btn.addEventListener("click", () => {
+    state.budgetItemFilter = btn.dataset.budgetItemFilter || "all";
+    render();
+  }));
+
+  $$("[data-budget-record-mode]").forEach(btn => btn.addEventListener("click", () => {
+    state.budgetRecordMode = btn.dataset.budgetRecordMode || "global";
     render();
   }));
 
@@ -3007,6 +3020,326 @@ function renderBudgetOperationsCard(editYear, editItem, current) {
   `;
 }
 
+
+function pctStatusClass(pct, remaining = 0) {
+  if (Number(remaining || 0) < 0 || Number(pct || 0) > 100) return "bad";
+  if (Number(pct || 0) >= 90) return "warn";
+  if (Number(pct || 0) >= 70) return "warn";
+  return "good";
+}
+
+function budgetItemStatus(row) {
+  const pct = Number(row?.used_pct || 0);
+  const remaining = Number(row?.remaining_amount || 0);
+  if (remaining < 0 || pct > 100) return { key: "overspent", label: "超支", className: "bad" };
+  if (pct >= 90) return { key: "near", label: "接近上限", className: "warn" };
+  if (pct >= 70) return { key: "watch", label: "注意", className: "warn" };
+  if (Number(row?.actual_amount || 0) > 0) return { key: "active", label: "有支出", className: "good" };
+  return { key: "normal", label: "正常", className: "good" };
+}
+
+function budgetItemFilterMatches(row, mode) {
+  const status = budgetItemStatus(row);
+  const nameText = `${row?.name || ""} ${row?.category_name || ""}`.toLowerCase();
+  if (!mode || mode === "all") return true;
+  if (mode === "focus") return ["overspent", "near", "watch"].includes(status.key) || Number(row.actual_amount || 0) > 0;
+  if (mode === "watch") return ["overspent", "near", "watch"].includes(status.key);
+  if (mode === "overspent") return status.key === "overspent";
+  if (mode === "spent") return Number(row.actual_amount || 0) > 0;
+  if (mode === "travel") return /(出國|旅行|旅遊|機票|飯店|住宿|交通)/i.test(nameText);
+  if (mode === "luxury") return /(娛樂|餐飲|高端|fine|live|music|comedy|電影|服飾|購物)/i.test(nameText);
+  return true;
+}
+
+function filteredBudgetItems(rows) {
+  return rows.filter(row => budgetItemFilterMatches(row, state.budgetItemFilter || "all"));
+}
+
+function budgetItemFilterButton(mode, label, rows) {
+  const active = (state.budgetItemFilter || "all") === mode ? "active" : "";
+  const count = rows.filter(r => budgetItemFilterMatches(r, mode)).length;
+  return `<button class="seg-btn ${active}" type="button" data-budget-item-filter="${escapeHtml(mode)}">${escapeHtml(label)} <span class="muted">${count}</span></button>`;
+}
+
+function renderBudgetItemFilterTabs(rows) {
+  return `
+    <div class="segmented budget-filter-tabs">
+      ${budgetItemFilterButton("all", "全部", rows)}
+      ${budgetItemFilterButton("focus", "重點", rows)}
+      ${budgetItemFilterButton("watch", "注意 / 接近", rows)}
+      ${budgetItemFilterButton("overspent", "超支", rows)}
+      ${budgetItemFilterButton("spent", "有支出", rows)}
+      ${budgetItemFilterButton("travel", "出國 / 旅行", rows)}
+      ${budgetItemFilterButton("luxury", "娛樂 / 品質", rows)}
+    </div>
+  `;
+}
+
+function isTravelOrExceptionalTx(t) {
+  const text = `${t.category_name || ""} ${t.budget_item_name || ""} ${t.merchant || ""} ${t.note || ""}`.toLowerCase();
+  if (t.cashflow_nature === "one_time") return true;
+  return /(出國|旅行|旅遊|機票|飯店|住宿|簽證|保險|行李|trip|travel|hotel|flight)/i.test(text);
+}
+
+function coreExpenseRowsForSelectedYear() {
+  return selectedYearActiveTransactions()
+    .filter(t => ["expense", "refund"].includes(t.type))
+    .filter(t => !isTravelOrExceptionalTx(t));
+}
+
+function netSignedAmount(t) {
+  const amount = Number(t.amount || 0);
+  if (t.type === "expense") return amount;
+  if (t.type === "refund") return -amount;
+  return 0;
+}
+
+function sumCoreExpense(rows) {
+  return rows.reduce((sum, t) => sum + netSignedAmount(t), 0);
+}
+
+function selectedYearIncomeRows({ regularOnly = false } = {}) {
+  return selectedYearActiveTransactions()
+    .filter(t => t.type === "income")
+    .filter(t => !regularOnly || t.cashflow_nature !== "one_time");
+}
+
+function financialHealthSummary() {
+  const current = getCurrentYearSummary();
+  const reality = budgetRealityCheckSummary();
+  const tx = selectedYearActiveTransactions();
+  const income = tx.reduce((sum, t) => sum + (t.type === "income" ? Number(t.amount || 0) : 0), 0);
+  const expense = tx.reduce((sum, t) => sum + (t.type === "expense" ? Number(t.amount || 0) : t.type === "refund" ? -Number(t.amount || 0) : 0), 0);
+  const coreExpense = sumCoreExpense(coreExpenseRowsForSelectedYear());
+  const fixedExpense = tx.reduce((sum, t) => {
+    if (!["expense", "refund"].includes(t.type) || t.cashflow_nature !== "fixed") return sum;
+    return sum + netSignedAmount(t);
+  }, 0);
+  const controllableExpense = tx.reduce((sum, t) => {
+    if (!["expense", "refund"].includes(t.type)) return sum;
+    const flexibleNecessity = ["quality", "luxury", "other", ""].includes(t.necessity_level || "");
+    const flexibleNature = t.cashflow_nature !== "fixed";
+    return (flexibleNecessity || flexibleNature) ? sum + netSignedAmount(t) : sum;
+  }, 0);
+
+  const months = Math.max(1, activeMonthRange().endMonth - activeMonthRange().startMonth + 1);
+  const avgMonthlyCoreExpense = coreExpense / months;
+  const liquidityMonths = avgMonthlyCoreExpense > 0 ? reality.availableCashNet / avgMonthlyCoreExpense : null;
+  const savingsRate = income > 0 ? (income - expense) / income : null;
+  const coreSavingsRate = income > 0 ? (income - coreExpense) / income : null;
+  const fixedExpenseRate = income > 0 ? fixedExpense / income : null;
+  const controllableExpenseRate = expense > 0 ? controllableExpense / expense : null;
+  const budgetDeviationRate = Number(current.available_budget || 0) > 0
+    ? (Number(current.actual_expense || 0) - Number(current.available_budget || 0)) / Number(current.available_budget || 1)
+    : null;
+
+  return {
+    income,
+    expense,
+    coreExpense,
+    fixedExpense,
+    controllableExpense,
+    avgMonthlyCoreExpense,
+    liquidityMonths,
+    savingsRate,
+    coreSavingsRate,
+    fixedExpenseRate,
+    controllableExpenseRate,
+    budgetDeviationRate,
+    safetyBuffer: reality.safetyBuffer,
+    availableCashNet: reality.availableCashNet
+  };
+}
+
+function healthMetricStatus(key, value) {
+  if (value === null || !Number.isFinite(Number(value))) return { label: "資料不足", className: "" };
+  if (key === "savingsRate" || key === "coreSavingsRate") {
+    if (value >= 0.5) return { label: "強", className: "good" };
+    if (value >= 0.25) return { label: "普通", className: "warn" };
+    return { label: "偏弱", className: "bad" };
+  }
+  if (key === "fixedExpenseRate") {
+    if (value <= 0.35) return { label: "低剛性", className: "good" };
+    if (value <= 0.55) return { label: "可接受", className: "warn" };
+    return { label: "偏剛性", className: "bad" };
+  }
+  if (key === "liquidityMonths") {
+    if (value >= 6) return { label: "充足", className: "good" };
+    if (value >= 3) return { label: "中等", className: "warn" };
+    return { label: "不足", className: "bad" };
+  }
+  if (key === "controllableExpenseRate") {
+    if (value >= 0.35) return { label: "可調空間高", className: "good" };
+    if (value >= 0.2) return { label: "中等", className: "warn" };
+    return { label: "彈性偏低", className: "bad" };
+  }
+  if (key === "budgetDeviationRate") {
+    if (value <= 0) return { label: "預算內", className: "good" };
+    if (value <= 0.1) return { label: "輕微超支", className: "warn" };
+    return { label: "超支", className: "bad" };
+  }
+  return { label: "", className: "" };
+}
+
+function pctText(value) {
+  return value === null || !Number.isFinite(Number(value)) ? "N/A" : `${fmtNumber(Number(value) * 100, 1)}%`;
+}
+
+function numberText(value, digits = 2) {
+  return value === null || !Number.isFinite(Number(value)) ? "N/A" : fmtNumber(value, digits);
+}
+
+function financialHealthRows() {
+  const h = financialHealthSummary();
+  const rows = [
+    { key: "savingsRate", name: "儲蓄率", value: pctText(h.savingsRate), base: "收入 − 淨支出 / 收入", note: "看年度收入有多少真的留下" },
+    { key: "coreSavingsRate", name: "核心儲蓄率", value: pctText(h.coreSavingsRate), base: "排除出國 / 一次性支出", note: "看日常體質，不被出國月份扭曲" },
+    { key: "fixedExpenseRate", name: "固定支出率", value: pctText(h.fixedExpenseRate), base: "固定支出 / 收入", note: "看生活剛性" },
+    { key: "liquidityMonths", name: "流動性月數", value: h.liquidityMonths === null ? "N/A" : `${fmtNumber(h.liquidityMonths, 1)} 個月`, base: "可用現金淨額 / 月核心支出", note: "看安全墊" },
+    { key: "controllableExpenseRate", name: "可控支出率", value: pctText(h.controllableExpenseRate), base: "可裁減支出 / 總支出", note: "收入下降時可調整空間" },
+    { key: "budgetDeviationRate", name: "預算偏差率", value: pctText(h.budgetDeviationRate), base: "實際支出 − 可用預算 / 可用預算", note: "看年度預算是否低估" }
+  ];
+  return rows.map(r => ({ ...r, status: healthMetricStatus(r.key, r.key === "liquidityMonths" ? h.liquidityMonths : ({
+    savingsRate: h.savingsRate,
+    coreSavingsRate: h.coreSavingsRate,
+    fixedExpenseRate: h.fixedExpenseRate,
+    controllableExpenseRate: h.controllableExpenseRate,
+    budgetDeviationRate: h.budgetDeviationRate
+  })[r.key]) }));
+}
+
+function mpcMpsAnalysis() {
+  const months = getMonthlyCoreBehaviorRows();
+  if (months.length < 2) {
+    return { ok: false, reason: "資料月份不足", rows: months };
+  }
+  const latest = months[months.length - 1]?.month || 12;
+  const currentMonths = months.filter(r => r.month >= latest - 2 && r.month <= latest);
+  const previousMonths = months.filter(r => r.month >= latest - 5 && r.month <= latest - 3);
+
+  const avg = (arr, key) => arr.length ? arr.reduce((sum, r) => sum + Number(r[key] || 0), 0) / arr.length : 0;
+  if (!currentMonths.length || !previousMonths.length) return { ok: false, reason: "需要至少前後兩段月份資料", rows: months };
+
+  const currentIncome = avg(currentMonths, "regularIncome");
+  const previousIncome = avg(previousMonths, "regularIncome");
+  const currentExpense = avg(currentMonths, "coreExpense");
+  const previousExpense = avg(previousMonths, "coreExpense");
+  const incomeDelta = currentIncome - previousIncome;
+  const expenseDelta = currentExpense - previousExpense;
+  const mpc = incomeDelta > 0 ? expenseDelta / incomeDelta : null;
+  const mps = mpc === null ? null : 1 - mpc;
+
+  return {
+    ok: incomeDelta > 0,
+    reason: incomeDelta > 0 ? "" : "近 3 個月常規收入沒有高於前 3 個月，MPC / MPS 不適合解讀",
+    currentMonths,
+    previousMonths,
+    currentIncome,
+    previousIncome,
+    currentExpense,
+    previousExpense,
+    incomeDelta,
+    expenseDelta,
+    mpc,
+    mps,
+    rows: months
+  };
+}
+
+function getMonthlyCoreBehaviorRows() {
+  const bucketMap = new Map();
+  activeMonthBuckets(month => ({ month })).forEach(r => {
+    bucketMap.set(r.month, {
+      label: `${r.month}月`,
+      month: r.month,
+      regularIncome: 0,
+      coreExpense: 0,
+      saving: 0
+    });
+  });
+
+  selectedYearActiveTransactions().forEach(t => {
+    const month = Number(t.tx_month || 0);
+    if (!bucketMap.has(month)) return;
+    const row = bucketMap.get(month);
+    if (t.type === "income" && t.cashflow_nature !== "one_time") row.regularIncome += Number(t.amount || 0);
+    if (["expense", "refund"].includes(t.type) && !isTravelOrExceptionalTx(t)) row.coreExpense += netSignedAmount(t);
+  });
+
+  return Array.from(bucketMap.values()).map(r => ({
+    ...r,
+    saving: r.regularIncome - r.coreExpense
+  }));
+}
+
+function renderFinancialHealthDashboard() {
+  const h = financialHealthSummary();
+  const m = mpcMpsAnalysis();
+  const mpcStatus = m.mpc === null ? "" : (m.mpc < 0.3 ? "good" : m.mpc < 0.6 ? "warn" : "bad");
+  const mpsStatus = m.mps === null ? "" : (m.mps > 0.5 ? "good" : m.mps > 0.3 ? "warn" : "bad");
+
+  return `
+    <div class="card financial-health-card">
+      <div class="card-title-row">
+        <h3>財務健康儀表板</h3>
+        <span class="badge">v62 + v63</span>
+      </div>
+      <p class="metric-sub">核心支出會排除 cashflow_nature = one_time，以及出國 / 旅行 / 機票 / 飯店等一次性旅遊支出。MPC / MPS 使用近 3 個月平均 vs 前 3 個月平均。</p>
+
+      <div class="grid cols-4">
+        ${metricCard("儲蓄率", pctText(h.savingsRate), "年度收入扣除淨支出", healthMetricStatus("savingsRate", h.savingsRate).className)}
+        ${metricCard("核心儲蓄率", pctText(h.coreSavingsRate), "排除出國 / 一次性", healthMetricStatus("coreSavingsRate", h.coreSavingsRate).className)}
+        ${metricCard("流動性月數", h.liquidityMonths === null ? "N/A" : `${fmtNumber(h.liquidityMonths, 1)} 月`, "可用現金淨額 / 月核心支出", healthMetricStatus("liquidityMonths", h.liquidityMonths).className)}
+        ${metricCard("固定支出率", pctText(h.fixedExpenseRate), "固定支出 / 收入", healthMetricStatus("fixedExpenseRate", h.fixedExpenseRate).className)}
+      </div>
+
+      <div class="grid cols-4">
+        ${metricCard("可控支出率", pctText(h.controllableExpenseRate), "可裁減支出 / 總支出", healthMetricStatus("controllableExpenseRate", h.controllableExpenseRate).className)}
+        ${metricCard("預算偏差率", pctText(h.budgetDeviationRate), "實際 vs 可用預算", healthMetricStatus("budgetDeviationRate", h.budgetDeviationRate).className)}
+        ${metricCard("MPC", m.mpc === null ? "N/A" : fmtNumber(m.mpc, 2), "個人邊際消費率", mpcStatus)}
+        ${metricCard("MPS", m.mps === null ? "N/A" : fmtNumber(m.mps, 2), "個人邊際儲蓄率", mpsStatus)}
+      </div>
+
+      ${m.reason ? `<p class="metric-sub warn-text">${escapeHtml(m.reason)}</p>` : `<p class="metric-sub">解讀：收入增加時，約 ${fmtNumber(Math.max(0, m.mpc || 0) * 100, 1)}% 轉成額外核心支出，約 ${fmtNumber((m.mps || 0) * 100, 1)}% 被留下。</p>`}
+
+      <details class="subtle-details">
+        <summary>查看指標明細</summary>
+        ${reportTable([
+          { label: "指標", key: "name" },
+          { label: "數值", key: "value" },
+          { label: "狀態", value: r => `<span class="badge ${r.status.className}">${escapeHtml(r.status.label)}</span>`, raw: true },
+          { label: "口徑", key: "base" },
+          { label: "用途", key: "note" }
+        ], financialHealthRows())}
+      </details>
+
+      <details class="subtle-details">
+        <summary>MPC / MPS 計算明細</summary>
+        ${renderMpcMpsDetailTable(m)}
+      </details>
+    </div>
+  `;
+}
+
+function renderMpcMpsDetailTable(m) {
+  const rows = [
+    { item: "近 3 個月平均常規收入", value: fmtMoney(m.currentIncome || 0), note: "收入且非 one_time" },
+    { item: "前 3 個月平均常規收入", value: fmtMoney(m.previousIncome || 0), note: "比較基準" },
+    { item: "收入變化", value: fmtMoney(m.incomeDelta || 0), note: "MPC/MPS 的分母" },
+    { item: "近 3 個月平均核心支出", value: fmtMoney(m.currentExpense || 0), note: "排除出國 / 一次性" },
+    { item: "前 3 個月平均核心支出", value: fmtMoney(m.previousExpense || 0), note: "比較基準" },
+    { item: "核心支出變化", value: fmtMoney(m.expenseDelta || 0), note: "MPC 的分子" },
+    { item: "MPC", value: m.mpc === null ? "N/A" : fmtNumber(m.mpc, 3), note: "核心支出變化 / 收入變化" },
+    { item: "MPS", value: m.mps === null ? "N/A" : fmtNumber(m.mps, 3), note: "1 − MPC" }
+  ];
+  return reportTable([
+    { label: "項目", key: "item" },
+    { label: "數值", key: "value" },
+    { label: "備註", key: "note" }
+  ], rows);
+}
+
+
 function renderGlobalBudgetContributionRecords() {
   const rows = globalBudgetContributionRowsForSelectedYear();
   return `
@@ -3054,30 +3387,93 @@ function renderBudgetMovementRecords() {
   `;
 }
 
+
+function budgetRecordCount(mode) {
+  if (mode === "global") return globalBudgetContributionRowsForSelectedYear().length;
+  if (mode === "item") return manualBudgetContributionRowsForSelectedYear().length;
+  if (mode === "close") return closeContributionRowsForSelectedYear().length;
+  if (mode === "movement") return enrichedBudgetMovementsForSelectedYear().length;
+  return 0;
+}
+
+function budgetRecordTab(mode, label) {
+  const active = (state.budgetRecordMode || "global") === mode ? "active" : "";
+  return `<button class="seg-btn ${active}" type="button" data-budget-record-mode="${escapeHtml(mode)}">${escapeHtml(label)} <span class="muted">${budgetRecordCount(mode)}</span></button>`;
+}
+
+function renderBudgetRecordsHub() {
+  const mode = state.budgetRecordMode || "global";
+  const body = mode === "item"
+    ? renderBudgetContributionTable(manualBudgetContributionRowsForSelectedYear())
+    : mode === "close"
+      ? renderBudgetCloseTable(closeContributionRowsForSelectedYear())
+      : mode === "movement"
+        ? renderBudgetMovementTable(enrichedBudgetMovementsForSelectedYear())
+        : renderGlobalBudgetContributionTable(globalBudgetContributionRowsForSelectedYear());
+
+  const label = {
+    global: "全局提撥",
+    item: "項目提撥",
+    close: "結帳紀錄",
+    movement: "預算移轉"
+  }[mode] || "全局提撥";
+
+  return `
+    <div class="card budget-records-hub" id="budgetRecordsSection">
+      <div class="card-title-row">
+        <h3>預算紀錄</h3>
+        <span class="badge">${escapeHtml(label)}</span>
+      </div>
+      <p class="metric-sub">把全局提撥、項目提撥、結帳紀錄、預算移轉集中在同一張卡，避免年度預算頁變成過長的資料牆。</p>
+      <div class="segmented budget-record-tabs">
+        ${budgetRecordTab("global", "全局提撥")}
+        ${budgetRecordTab("item", "項目提撥")}
+        ${budgetRecordTab("close", "結帳紀錄")}
+        ${budgetRecordTab("movement", "預算移轉")}
+      </div>
+      <div class="budget-record-body">
+        ${body}
+      </div>
+    </div>
+  `;
+}
+
+
 function renderBudget() {
   const editYear = state.editing.year;
   const editItem = state.editing.budgetItem;
   const current = getCurrentYearSummary();
-  const items = budgetItemSummariesForSelectedYear();
+  const allItems = budgetItemSummariesForSelectedYear();
+  const items = filteredBudgetItems(allItems);
+  const reality = budgetRealityCheckSummary();
+  const safetyStatus = reality.safetyBuffer >= 0 ? "good" : "bad";
 
   return `
-    <div class="grid cols-4">
-      ${metricCard("目前可用預算", fmtMoney(current.available_budget), yearBudgetModeLabel(current))}
-      ${metricCard("年度提撥合計", fmtMoney(current.annual_budget), "全局提撥紀錄合計")}
-      ${metricCard("已用預算", fmtMoney(current.actual_expense), `${fmtNumber(current.budget_used_pct, 1)}%`, "bad")}
+    <div class="grid cols-4 budget-top-kpis">
+      ${metricCard("目前可用預算", fmtMoney(current.available_budget), `提撥 ${fmtMoney(current.annual_budget)}｜結轉 ${fmtMoney(current.carryover_from_previous)}`)}
+      ${metricCard("已用預算", fmtMoney(current.actual_expense), `使用率 ${fmtNumber(current.budget_used_pct, 1)}%`, "bad")}
       ${metricCard("剩餘預算", fmtMoney(current.remaining_budget), Number(current.remaining_budget || 0) >= 0 ? "預算內" : "超支", Number(current.remaining_budget || 0) >= 0 ? "good" : "bad")}
+      ${metricCard("預算安全墊", fmtMoney(reality.safetyBuffer), reality.safetyBuffer >= 0 ? "現金足以覆蓋預算" : "預算超過現金支撐", safetyStatus)}
     </div>
 
-    ${renderBudgetAllocationCards()}
+    <details class="card budget-section-card" open>
+      <summary class="collapsible-summary">
+        <span>預算池分配 / 現金驗算</span>
+        <span class="badge">${reality.safetyBuffer >= 0 ? "安全" : "注意"}</span>
+      </summary>
+      <div class="collapsible-body">
+        ${renderBudgetAllocationCards()}
+        ${renderBudgetRealityCheck()}
+      </div>
+    </details>
 
-    ${renderBudgetRealityCheck()}
-
-    <div class="card budget-focus-card">
+    <div class="card budget-focus-card" id="budgetItemsSection">
       <div class="card-title-row">
         <h3>預算項目</h3>
-        <span class="badge">${items.length} 項</span>
+        <span class="badge">${items.length}/${allItems.length} 項</span>
       </div>
-      <p class="metric-sub">每月項目主表看本月；每年 + 餘額結轉 = 年度結轉型。也可直接按「結帳」重開週期：主畫面實際歸 0、剩餘銀彈承接，累積資訊仍保留歷史。</p>
+      <p class="metric-sub">可用篩選快速看「注意 / 接近 / 超支」項目；狀態以目前視角的使用率與剩餘額判斷。</p>
+      ${renderBudgetItemFilterTabs(allItems)}
       ${renderBudgetItemTable(items)}
     </div>
 
@@ -3087,15 +3483,10 @@ function renderBudget() {
 
     ${renderAnnualRolloverCard()}
 
-    ${renderGlobalBudgetContributionRecords()}
-
-    ${renderBudgetContributionRecords()}
-
-    ${renderBudgetCloseRecords()}
-
-    ${renderBudgetMovementRecords()}
+    ${renderBudgetRecordsHub()}
   `;
 }
+
 
 function renderBudgetItemTable(rows) {
   if (!rows.length) return `<div class="empty">尚無預算項目</div>`;
@@ -3104,13 +3495,14 @@ function renderBudgetItemTable(rows) {
     <div class="mobile-card-list">
       ${rows.map(i => {
         const pct = Number(i.used_pct || 0);
+        const status = budgetItemStatus(i);
         const isMonth = i.primary_scope === "month";
         const isScoped = i.primary_scope !== "year";
         return `
           <div class="mobile-data-card">
             <div class="mobile-data-head">
               <div>
-                <strong>${escapeHtml(i.name)}</strong>
+                <strong>${escapeHtml(i.name)} <span class="badge ${status.className}">${escapeHtml(status.label)}</span></strong>
                 <span>${escapeHtml(labelOf(i.item_type))} · ${escapeHtml(i.category_name || "未分類")} · ${escapeHtml(i.scope_label)}</span>
               </div>
               <div class="mobile-amount">${fmtMoney(i.current_budget_amount)}</div>
@@ -3138,15 +3530,17 @@ function renderBudgetItemTable(rows) {
   const tableView = `
     <div class="table-wrap desktop-table">
       <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>可用</th><th>實際</th><th>剩餘</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>狀態</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>可用</th><th>實際</th><th>剩餘</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
         <tbody>
           ${rows.map(i => {
             const pct = Number(i.used_pct || 0);
+            const status = budgetItemStatus(i);
             const isMonth = i.primary_scope === "month";
         const isScoped = i.primary_scope !== "year";
             return `
               <tr>
                 <td>${escapeHtml(i.name)}</td>
+                <td><span class="badge ${status.className}">${escapeHtml(status.label)}</span></td>
                 <td><span class="badge">${escapeHtml(labelOf(i.item_type))}</span></td>
                 <td>${escapeHtml(i.category_name || "")}</td>
                 <td>
@@ -4324,6 +4718,8 @@ function renderAuditReportCenter() {
 
 function renderReports() {
   return `
+    ${renderFinancialHealthDashboard()}
+
     ${renderChartToolbar()}
     ${renderAnalyticsSummaryCards()}
 

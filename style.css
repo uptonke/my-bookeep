@@ -1965,3 +1965,60 @@ td.actions { width: 126px; }
     width: 100%;
   }
 }
+
+
+/* v61-v63 UI整合 */
+.budget-filter-tabs,
+.budget-record-tabs {
+  margin: 12px 0 16px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.budget-section-card > .collapsible-body {
+  padding-top: 12px;
+}
+
+.budget-record-body {
+  margin-top: 12px;
+}
+
+.financial-health-card .subtle-details {
+  margin-top: 12px;
+}
+
+.warn-text {
+  color: var(--warn);
+}
+
+.badge.bad {
+  background: rgba(255, 69, 58, .14);
+  color: var(--danger);
+}
+
+.badge.warn {
+  background: rgba(255, 159, 10, .16);
+  color: var(--warn);
+}
+
+.badge.good {
+  background: rgba(48, 209, 88, .14);
+  color: var(--success);
+}
+
+@media (max-width: 760px) {
+  .budget-filter-tabs,
+  .budget-record-tabs {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    flex-wrap: nowrap;
+  }
+
+  .budget-filter-tabs .seg-btn,
+  .budget-record-tabs .seg-btn {
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+}
