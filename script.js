@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v63-mpc-mps-integrated";
+const APP_VERSION = "v63.1-ui-mpc-fix";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -3189,6 +3189,14 @@ function numberText(value, digits = 2) {
   return value === null || !Number.isFinite(Number(value)) ? "N/A" : fmtNumber(value, digits);
 }
 
+function finiteRatioValue(value) {
+  return Number.isFinite(Number(value));
+}
+
+function ratioText(value, digits = 2) {
+  return finiteRatioValue(value) ? fmtNumber(Number(value), digits) : "N/A";
+}
+
 function financialHealthRows() {
   const h = financialHealthSummary();
   const rows = [
@@ -3210,28 +3218,67 @@ function financialHealthRows() {
 
 function mpcMpsAnalysis() {
   const months = getMonthlyCoreBehaviorRows();
-  if (months.length < 2) {
-    return { ok: false, reason: "資料月份不足", rows: months };
+
+  const empty = (reason) => ({
+    ok: false,
+    reason,
+    currentMonths: [],
+    previousMonths: [],
+    currentIncome: null,
+    previousIncome: null,
+    currentExpense: null,
+    previousExpense: null,
+    incomeDelta: null,
+    expenseDelta: null,
+    mpc: null,
+    mps: null,
+    rows: months
+  });
+
+  if (months.length < 6) {
+    return empty("MPC / MPS 需要至少 6 個月份，才能做近 3 個月 vs 前 3 個月比較。");
   }
+
   const latest = months[months.length - 1]?.month || 12;
   const currentMonths = months.filter(r => r.month >= latest - 2 && r.month <= latest);
   const previousMonths = months.filter(r => r.month >= latest - 5 && r.month <= latest - 3);
 
-  const avg = (arr, key) => arr.length ? arr.reduce((sum, r) => sum + Number(r[key] || 0), 0) / arr.length : 0;
-  if (!currentMonths.length || !previousMonths.length) return { ok: false, reason: "需要至少前後兩段月份資料", rows: months };
+  if (currentMonths.length < 3 || previousMonths.length < 3) {
+    return empty("MPC / MPS 需要完整前後兩段各 3 個月資料。");
+  }
 
+  const avg = (arr, key) => arr.reduce((sum, r) => sum + Number(r[key] || 0), 0) / arr.length;
   const currentIncome = avg(currentMonths, "regularIncome");
   const previousIncome = avg(previousMonths, "regularIncome");
   const currentExpense = avg(currentMonths, "coreExpense");
   const previousExpense = avg(previousMonths, "coreExpense");
   const incomeDelta = currentIncome - previousIncome;
   const expenseDelta = currentExpense - previousExpense;
-  const mpc = incomeDelta > 0 ? expenseDelta / incomeDelta : null;
-  const mps = mpc === null ? null : 1 - mpc;
+
+  if (!Number.isFinite(incomeDelta) || incomeDelta <= 0) {
+    return {
+      ok: false,
+      reason: "近 3 個月常規收入沒有高於前 3 個月，MPC / MPS 不適合解讀。",
+      currentMonths,
+      previousMonths,
+      currentIncome,
+      previousIncome,
+      currentExpense,
+      previousExpense,
+      incomeDelta,
+      expenseDelta,
+      mpc: null,
+      mps: null,
+      rows: months
+    };
+  }
+
+  const mpc = expenseDelta / incomeDelta;
+  const mps = 1 - mpc;
 
   return {
-    ok: incomeDelta > 0,
-    reason: incomeDelta > 0 ? "" : "近 3 個月常規收入沒有高於前 3 個月，MPC / MPS 不適合解讀",
+    ok: true,
+    reason: "",
     currentMonths,
     previousMonths,
     currentIncome,
@@ -3275,16 +3322,18 @@ function getMonthlyCoreBehaviorRows() {
 function renderFinancialHealthDashboard() {
   const h = financialHealthSummary();
   const m = mpcMpsAnalysis();
-  const mpcStatus = m.mpc === null ? "" : (m.mpc < 0.3 ? "good" : m.mpc < 0.6 ? "warn" : "bad");
-  const mpsStatus = m.mps === null ? "" : (m.mps > 0.5 ? "good" : m.mps > 0.3 ? "warn" : "bad");
+  const mpcValue = finiteRatioValue(m.mpc) ? Number(m.mpc) : null;
+  const mpsValue = finiteRatioValue(m.mps) ? Number(m.mps) : null;
+  const mpcStatus = mpcValue === null ? "" : (mpcValue < 0.3 ? "good" : mpcValue < 0.6 ? "warn" : "bad");
+  const mpsStatus = mpsValue === null ? "" : (mpsValue > 0.5 ? "good" : mpsValue > 0.3 ? "warn" : "bad");
 
   return `
     <div class="card financial-health-card">
       <div class="card-title-row">
         <h3>財務健康儀表板</h3>
-        <span class="badge">v62 + v63</span>
+        <span class="badge">v62 + v63.1</span>
       </div>
-      <p class="metric-sub">核心支出會排除 cashflow_nature = one_time，以及出國 / 旅行 / 機票 / 飯店等一次性旅遊支出。MPC / MPS 使用近 3 個月平均 vs 前 3 個月平均。</p>
+      <p class="metric-sub">核心支出會排除 cashflow_nature = one_time，以及出國 / 旅行 / 機票 / 飯店等一次性旅遊支出。MPC / MPS 使用近 3 個月平均 vs 前 3 個月平均；資料不足或收入沒有上升時會顯示 N/A。</p>
 
       <div class="grid cols-4">
         ${metricCard("儲蓄率", pctText(h.savingsRate), "年度收入扣除淨支出", healthMetricStatus("savingsRate", h.savingsRate).className)}
@@ -3296,11 +3345,11 @@ function renderFinancialHealthDashboard() {
       <div class="grid cols-4">
         ${metricCard("可控支出率", pctText(h.controllableExpenseRate), "可裁減支出 / 總支出", healthMetricStatus("controllableExpenseRate", h.controllableExpenseRate).className)}
         ${metricCard("預算偏差率", pctText(h.budgetDeviationRate), "實際 vs 可用預算", healthMetricStatus("budgetDeviationRate", h.budgetDeviationRate).className)}
-        ${metricCard("MPC", m.mpc === null ? "N/A" : fmtNumber(m.mpc, 2), "個人邊際消費率", mpcStatus)}
-        ${metricCard("MPS", m.mps === null ? "N/A" : fmtNumber(m.mps, 2), "個人邊際儲蓄率", mpsStatus)}
+        ${metricCard("MPC", ratioText(mpcValue, 2), "個人邊際消費率", mpcStatus)}
+        ${metricCard("MPS", ratioText(mpsValue, 2), "個人邊際儲蓄率", mpsStatus)}
       </div>
 
-      ${m.reason ? `<p class="metric-sub warn-text">${escapeHtml(m.reason)}</p>` : `<p class="metric-sub">解讀：收入增加時，約 ${fmtNumber(Math.max(0, m.mpc || 0) * 100, 1)}% 轉成額外核心支出，約 ${fmtNumber((m.mps || 0) * 100, 1)}% 被留下。</p>`}
+      ${m.reason ? `<p class="metric-sub warn-text">${escapeHtml(m.reason)}</p>` : `<p class="metric-sub">解讀：收入增加時，約 ${fmtNumber(mpcValue * 100, 1)}% 轉成額外核心支出，約 ${fmtNumber(mpsValue * 100, 1)}% 被留下。</p>`}
 
       <details class="subtle-details">
         <summary>查看指標明細</summary>
@@ -3322,15 +3371,17 @@ function renderFinancialHealthDashboard() {
 }
 
 function renderMpcMpsDetailTable(m) {
+  const moneyOrNA = value => finiteRatioValue(value) ? fmtMoney(value) : "N/A";
+  const ratioOrNA = value => finiteRatioValue(value) ? fmtNumber(value, 3) : "N/A";
   const rows = [
-    { item: "近 3 個月平均常規收入", value: fmtMoney(m.currentIncome || 0), note: "收入且非 one_time" },
-    { item: "前 3 個月平均常規收入", value: fmtMoney(m.previousIncome || 0), note: "比較基準" },
-    { item: "收入變化", value: fmtMoney(m.incomeDelta || 0), note: "MPC/MPS 的分母" },
-    { item: "近 3 個月平均核心支出", value: fmtMoney(m.currentExpense || 0), note: "排除出國 / 一次性" },
-    { item: "前 3 個月平均核心支出", value: fmtMoney(m.previousExpense || 0), note: "比較基準" },
-    { item: "核心支出變化", value: fmtMoney(m.expenseDelta || 0), note: "MPC 的分子" },
-    { item: "MPC", value: m.mpc === null ? "N/A" : fmtNumber(m.mpc, 3), note: "核心支出變化 / 收入變化" },
-    { item: "MPS", value: m.mps === null ? "N/A" : fmtNumber(m.mps, 3), note: "1 − MPC" }
+    { item: "近 3 個月平均常規收入", value: moneyOrNA(m.currentIncome), note: "收入且非 one_time" },
+    { item: "前 3 個月平均常規收入", value: moneyOrNA(m.previousIncome), note: "比較基準" },
+    { item: "收入變化", value: moneyOrNA(m.incomeDelta), note: "MPC/MPS 的分母" },
+    { item: "近 3 個月平均核心支出", value: moneyOrNA(m.currentExpense), note: "排除出國 / 一次性" },
+    { item: "前 3 個月平均核心支出", value: moneyOrNA(m.previousExpense), note: "比較基準" },
+    { item: "核心支出變化", value: moneyOrNA(m.expenseDelta), note: "MPC 的分子" },
+    { item: "MPC", value: ratioOrNA(m.mpc), note: "核心支出變化 / 收入變化" },
+    { item: "MPS", value: ratioOrNA(m.mps), note: "1 − MPC" }
   ];
   return reportTable([
     { label: "項目", key: "item" },
@@ -6932,6 +6983,16 @@ function bindRenderedEvents() {
   $$("[data-budget-operation]").forEach(btn => btn.addEventListener("click", () => {
     clearBudgetOperationEditing();
     state.budgetOperationMode = btn.dataset.budgetOperation || "globalContribution";
+    render();
+  }));
+
+  $$("[data-budget-item-filter]").forEach(btn => btn.addEventListener("click", () => {
+    state.budgetItemFilter = btn.dataset.budgetItemFilter || "all";
+    render();
+  }));
+
+  $$("[data-budget-record-mode]").forEach(btn => btn.addEventListener("click", () => {
+    state.budgetRecordMode = btn.dataset.budgetRecordMode || "global";
     render();
   }));
 
