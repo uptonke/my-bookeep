@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v63.1-ui-mpc-fix";
+const APP_VERSION = "v63.3-rollover-note-fix";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -312,6 +312,57 @@ function accountCoverageSelect(selected = "auto") {
       <option value="exclude" ${selected === "exclude" ? "selected" : ""}>不列入</option>
     </select>
   `;
+}
+
+function accountPurposeMode(note = "") {
+  const m = String(note || "").match(/\[purpose:(auto|daily|budget|fire|exclude)\]/);
+  return m ? m[1] : "auto";
+}
+
+function stripAccountPurposeMarker(note = "") {
+  return String(note || "").replace(/\s*\[purpose:(auto|daily|budget|fire|exclude)\]\s*/g, "").trim();
+}
+
+function applyAccountPurposeMarker(note = "", mode = "auto") {
+  const cleaned = stripAccountPurposeMarker(note);
+  if (!mode || mode === "auto") return cleaned;
+  return `${cleaned}${cleaned ? "\\n" : ""}[purpose:${mode}]`;
+}
+
+function cleanAccountNoteForEdit(note = "") {
+  return stripAccountPurposeMarker(stripAccountCoverageMarker(note || ""));
+}
+
+function accountPurposeLabel(mode = "auto") {
+  const map = {
+    auto: "自動判斷",
+    daily: "日常現金帳戶",
+    budget: "預算暫存帳戶",
+    fire: "FIRE / 投資帳戶",
+    exclude: "不列入配置"
+  };
+  return map[mode] || "自動判斷";
+}
+
+function accountPurposeSelect(selected = "auto") {
+  return `
+    <select class="input" name="purpose_mode">
+      <option value="auto" ${selected === "auto" ? "selected" : ""}>自動判斷</option>
+      <option value="daily" ${selected === "daily" ? "selected" : ""}>日常現金帳戶</option>
+      <option value="budget" ${selected === "budget" ? "selected" : ""}>預算暫存帳戶</option>
+      <option value="fire" ${selected === "fire" ? "selected" : ""}>FIRE / 投資帳戶</option>
+      <option value="exclude" ${selected === "exclude" ? "selected" : ""}>不列入配置</option>
+    </select>
+  `;
+}
+
+function isFireAccount(account = {}) {
+  const mode = accountPurposeMode(account.note || "");
+  if (mode === "fire") return true;
+  if (["daily", "budget", "exclude"].includes(mode)) return false;
+  const text = `${account.name || ""} ${stripAccountCoverageMarker(stripAccountPurposeMarker(account.note || ""))}`.toLowerCase();
+  if (/(預算|暫存|生活|日常|現金|信用卡|card)/i.test(text)) return false;
+  return /(fire|投資|證券|股票|etf|基金|退休|retire|broker|brokerage)/i.test(text);
 }
 
 function defaultAccountIdFor(type = "expense") {
@@ -2886,6 +2937,57 @@ function renderYearSettingsForm(editYear, current) {
   `;
 }
 
+
+function budgetItemInternalNoteLines(note) {
+  return String(note || "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.startsWith("[budget_item_notes:") || line.startsWith("[budget_item_history:") || line.startsWith("[budget_cycle_notes:"));
+}
+
+function budgetItemUserNote(note) {
+  return String(note || "")
+    .split(/\r?\n/)
+    .filter(line => {
+      const t = line.trim();
+      return !t.startsWith("[budget_item_notes:") && !t.startsWith("[budget_item_history:") && !t.startsWith("[budget_cycle_notes:");
+    })
+    .join("\n")
+    .trim();
+}
+
+function mergeBudgetItemNote(userNote, existingNote) {
+  const cleanUserNote = budgetItemUserNote(userNote);
+  const internalLines = budgetItemInternalNoteLines(existingNote);
+  return [cleanUserNote, ...internalLines].filter(Boolean).join("\n") || null;
+}
+
+function budgetItemUsesRolloverBalance(row) {
+  return row?.rollover_mode === "carryover";
+}
+
+function budgetItemSpendableAmount(row) {
+  if (!budgetItemUsesRolloverBalance(row)) return Number(row?.current_budget_amount || 0);
+  return Number(row?.year_remaining_amount ?? row?.remaining_amount ?? 0);
+}
+
+function budgetItemSpendableLabel(row) {
+  if (!budgetItemUsesRolloverBalance(row)) return "目前可用";
+  return "目前總可花";
+}
+
+function budgetItemCarryInAmount(row) {
+  if (!budgetItemUsesRolloverBalance(row)) return 0;
+  return Number(row?.year_remaining_amount || 0) - Number(row?.remaining_amount || 0);
+}
+
+function renderBudgetItemRolloverMeta(row) {
+  if (!budgetItemUsesRolloverBalance(row)) return "";
+  const carry = budgetItemCarryInAmount(row);
+  return `<span>目前總可花 ${fmtMoney(row.year_remaining_amount)} = 本週期剩餘 ${fmtMoney(row.remaining_amount)}${Math.abs(carry) > 0 ? ` + 前期承接 ${fmtMoney(carry)}` : ""}</span>`;
+}
+
+
 function renderBudgetItemForm(editItem) {
   return `
     <form id="budgetItemForm" class="form-grid two">
@@ -2908,7 +3010,7 @@ function renderBudgetItemForm(editItem) {
           </select>`)}
           <div class="field wide">
             <label>備註</label>
-            <textarea class="input" name="note">${escapeHtml(editItem?.note || "")}</textarea>
+            <textarea class="input" name="note">${escapeHtml(budgetItemUserNote(editItem?.note || ""))}</textarea>
           </div>
         </div>
       </details>
@@ -3104,6 +3206,87 @@ function selectedYearIncomeRows({ regularOnly = false } = {}) {
     .filter(t => !regularOnly || t.cashflow_nature !== "one_time");
 }
 
+
+function isTravelTextTx(t) {
+  const text = `${t.category_name || ""} ${t.budget_item_name || ""} ${t.merchant || ""} ${t.note || ""}`.toLowerCase();
+  return /(出國|旅行|旅遊|機票|飯店|住宿|簽證|行李|trip|travel|hotel|flight)/i.test(text);
+}
+
+function isRegularIncomeTx(t) {
+  return t.type === "income" && t.cashflow_nature !== "one_time";
+}
+
+function isBaseLivingExpense(t) {
+  if (!["expense", "refund"].includes(t.type)) return false;
+  if (t.cashflow_nature === "one_time") return false;
+  if (isTravelTextTx(t)) return false;
+  const necessity = t.necessity_level || "other";
+  if (necessity === "survival") return true;
+  if (t.cashflow_nature === "fixed" && !["luxury", "investment"].includes(necessity)) return true;
+  return false;
+}
+
+function isLuxuryAllocationExpense(t) {
+  return ["expense", "refund"].includes(t.type)
+    && t.necessity_level === "luxury"
+    && !isTravelTextTx(t);
+}
+
+function isQualityAllocationExpense(t) {
+  return ["expense", "refund"].includes(t.type)
+    && t.necessity_level === "quality"
+    && !isBaseLivingExpense(t)
+    && !isTravelTextTx(t);
+}
+
+function isTravelAllocationExpense(t) {
+  return ["expense", "refund"].includes(t.type) && isTravelTextTx(t);
+}
+
+function fireTransferAmount(t) {
+  if (t.type !== "transfer") return 0;
+  const account = state.data.accounts.find(a => a.id === t.account_id) || {};
+  const toAccount = state.data.accounts.find(a => a.id === t.to_account_id) || {};
+  const amount = Number(t.amount || 0);
+  const fromFire = isFireAccount(account);
+  const toFire = isFireAccount(toAccount);
+  if (toFire && !fromFire) return amount;
+  if (fromFire && !toFire) return -amount;
+  return 0;
+}
+
+function periodCashflowAllocation(rows) {
+  const regularIncome = rows.reduce((sum, t) => sum + (isRegularIncomeTx(t) ? Number(t.amount || 0) : 0), 0);
+  const baseLivingExpense = rows.reduce((sum, t) => sum + (isBaseLivingExpense(t) ? netSignedAmount(t) : 0), 0);
+  const discretionaryCashflow = regularIncome - baseLivingExpense;
+  const fireContribution = rows.reduce((sum, t) => sum + fireTransferAmount(t), 0);
+  const luxuryExpense = rows.reduce((sum, t) => sum + (isLuxuryAllocationExpense(t) ? netSignedAmount(t) : 0), 0);
+  const qualityExpense = rows.reduce((sum, t) => sum + (isQualityAllocationExpense(t) ? netSignedAmount(t) : 0), 0);
+  const travelExpense = rows.reduce((sum, t) => sum + (isTravelAllocationExpense(t) ? netSignedAmount(t) : 0), 0);
+  const allocated = fireContribution + luxuryExpense + qualityExpense + travelExpense;
+  const idleRetained = discretionaryCashflow - allocated;
+  const rate = value => discretionaryCashflow > 0 ? value / discretionaryCashflow : null;
+  return {
+    regularIncome,
+    baseLivingExpense,
+    discretionaryCashflow,
+    fireContribution,
+    luxuryExpense,
+    qualityExpense,
+    travelExpense,
+    idleRetained,
+    fireRate: rate(fireContribution),
+    luxuryRate: rate(luxuryExpense),
+    qualityRate: rate(qualityExpense),
+    travelRate: rate(travelExpense),
+    idleRate: rate(idleRetained)
+  };
+}
+
+function selectedYearAllocationSummary() {
+  return periodCashflowAllocation(selectedYearActiveTransactions().filter(t => t.status !== "cancelled"));
+}
+
 function financialHealthSummary() {
   const current = getCurrentYearSummary();
   const reality = budgetRealityCheckSummary();
@@ -3132,6 +3315,7 @@ function financialHealthSummary() {
   const budgetDeviationRate = Number(current.available_budget || 0) > 0
     ? (Number(current.actual_expense || 0) - Number(current.available_budget || 0)) / Number(current.available_budget || 1)
     : null;
+  const allocation = selectedYearAllocationSummary();
 
   return {
     income,
@@ -3147,7 +3331,8 @@ function financialHealthSummary() {
     controllableExpenseRate,
     budgetDeviationRate,
     safetyBuffer: reality.safetyBuffer,
-    availableCashNet: reality.availableCashNet
+    availableCashNet: reality.availableCashNet,
+    allocation
   };
 }
 
@@ -3178,6 +3363,26 @@ function healthMetricStatus(key, value) {
     if (value <= 0.1) return { label: "輕微超支", className: "warn" };
     return { label: "超支", className: "bad" };
   }
+  if (key === "discretionaryCashflow") {
+    if (value > 0) return { label: "可配置", className: "good" };
+    if (value === 0) return { label: "剛好打平", className: "warn" };
+    return { label: "基本盤吃掉收入", className: "bad" };
+  }
+  if (key === "fireRate") {
+    if (value >= 0.5) return { label: "資產優先", className: "good" };
+    if (value >= 0.25) return { label: "可接受", className: "warn" };
+    return { label: "投入偏低", className: "bad" };
+  }
+  if (key === "luxuryRate") {
+    if (value <= 0.2) return { label: "享樂受控", className: "good" };
+    if (value <= 0.4) return { label: "偏高", className: "warn" };
+    return { label: "享樂吃重", className: "bad" };
+  }
+  if (key === "idleRate") {
+    if (value >= 0.1) return { label: "有保留", className: "good" };
+    if (value >= 0) return { label: "低保留", className: "warn" };
+    return { label: "透支配置", className: "bad" };
+  }
   return { label: "", className: "" };
 }
 
@@ -3205,14 +3410,23 @@ function financialHealthRows() {
     { key: "fixedExpenseRate", name: "固定支出率", value: pctText(h.fixedExpenseRate), base: "固定支出 / 收入", note: "看生活剛性" },
     { key: "liquidityMonths", name: "流動性月數", value: h.liquidityMonths === null ? "N/A" : `${fmtNumber(h.liquidityMonths, 1)} 個月`, base: "可用現金淨額 / 月核心支出", note: "看安全墊" },
     { key: "controllableExpenseRate", name: "可控支出率", value: pctText(h.controllableExpenseRate), base: "可裁減支出 / 總支出", note: "收入下降時可調整空間" },
-    { key: "budgetDeviationRate", name: "預算偏差率", value: pctText(h.budgetDeviationRate), base: "實際支出 − 可用預算 / 可用預算", note: "看年度預算是否低估" }
+    { key: "budgetDeviationRate", name: "預算偏差率", value: pctText(h.budgetDeviationRate), base: "實際支出 − 可用預算 / 可用預算", note: "看年度預算是否低估" },
+    { key: "discretionaryCashflow", name: "可自由配置現金流", value: fmtMoney(h.allocation.discretionaryCashflow), base: "常規收入 − 基本生活支出", note: "看基本生活後剩多少可配置" },
+    { key: "fireRate", name: "FIRE 配置率", value: pctText(h.allocation.fireRate), base: "轉入 FIRE 帳戶 / 可自由配置現金流", note: "看自由現金流有多少轉成資產" },
+    { key: "luxuryRate", name: "奢侈娛樂配置率", value: pctText(h.allocation.luxuryRate), base: "奢侈娛樂支出 / 可自由配置現金流", note: "看自由現金流有多少流向享樂" },
+    { key: "idleRate", name: "閒置保留率", value: pctText(h.allocation.idleRate), base: "未配置餘額 / 可自由配置現金流", note: "看自由現金流有多少留在日常現金" }
   ];
-  return rows.map(r => ({ ...r, status: healthMetricStatus(r.key, r.key === "liquidityMonths" ? h.liquidityMonths : ({
+  return rows.map(r => ({ ...r, status: healthMetricStatus(r.key, ({
     savingsRate: h.savingsRate,
     coreSavingsRate: h.coreSavingsRate,
     fixedExpenseRate: h.fixedExpenseRate,
+    liquidityMonths: h.liquidityMonths,
     controllableExpenseRate: h.controllableExpenseRate,
-    budgetDeviationRate: h.budgetDeviationRate
+    budgetDeviationRate: h.budgetDeviationRate,
+    discretionaryCashflow: h.allocation.discretionaryCashflow,
+    fireRate: h.allocation.fireRate,
+    luxuryRate: h.allocation.luxuryRate,
+    idleRate: h.allocation.idleRate
   })[r.key]) }));
 }
 
@@ -3224,19 +3438,22 @@ function mpcMpsAnalysis() {
     reason,
     currentMonths: [],
     previousMonths: [],
-    currentIncome: null,
-    previousIncome: null,
-    currentExpense: null,
-    previousExpense: null,
-    incomeDelta: null,
-    expenseDelta: null,
+    currentFreeCashflow: null,
+    previousFreeCashflow: null,
+    freeCashflowDelta: null,
+    currentLuxury: null,
+    previousLuxury: null,
+    luxuryDelta: null,
+    currentFire: null,
+    previousFire: null,
+    fireDelta: null,
     mpc: null,
     mps: null,
     rows: months
   });
 
   if (months.length < 6) {
-    return empty("MPC / MPS 需要至少 6 個月份，才能做近 3 個月 vs 前 3 個月比較。");
+    return empty("個人化 MPC / MPS 需要至少 6 個月份，才能做近 3 個月 vs 前 3 個月比較；目前仍可先看年度 FIRE / 奢侈娛樂配置率。");
   }
 
   const latest = months[months.length - 1]?.month || 12;
@@ -3244,49 +3461,58 @@ function mpcMpsAnalysis() {
   const previousMonths = months.filter(r => r.month >= latest - 5 && r.month <= latest - 3);
 
   if (currentMonths.length < 3 || previousMonths.length < 3) {
-    return empty("MPC / MPS 需要完整前後兩段各 3 個月資料。");
+    return empty("個人化 MPC / MPS 需要完整前後兩段各 3 個月資料；目前仍可先看年度配置率。");
   }
 
   const avg = (arr, key) => arr.reduce((sum, r) => sum + Number(r[key] || 0), 0) / arr.length;
-  const currentIncome = avg(currentMonths, "regularIncome");
-  const previousIncome = avg(previousMonths, "regularIncome");
-  const currentExpense = avg(currentMonths, "coreExpense");
-  const previousExpense = avg(previousMonths, "coreExpense");
-  const incomeDelta = currentIncome - previousIncome;
-  const expenseDelta = currentExpense - previousExpense;
+  const currentFreeCashflow = avg(currentMonths, "discretionaryCashflow");
+  const previousFreeCashflow = avg(previousMonths, "discretionaryCashflow");
+  const currentLuxury = avg(currentMonths, "luxuryExpense");
+  const previousLuxury = avg(previousMonths, "luxuryExpense");
+  const currentFire = avg(currentMonths, "fireContribution");
+  const previousFire = avg(previousMonths, "fireContribution");
+  const freeCashflowDelta = currentFreeCashflow - previousFreeCashflow;
+  const luxuryDelta = currentLuxury - previousLuxury;
+  const fireDelta = currentFire - previousFire;
 
-  if (!Number.isFinite(incomeDelta) || incomeDelta <= 0) {
+  if (!Number.isFinite(freeCashflowDelta) || freeCashflowDelta <= 0) {
     return {
       ok: false,
-      reason: "近 3 個月常規收入沒有高於前 3 個月，MPC / MPS 不適合解讀。",
+      reason: "近 3 個月可自由配置現金流沒有高於前 3 個月，邊際 MPC / MPS 不適合解讀；請看年度配置率與支出調整。",
       currentMonths,
       previousMonths,
-      currentIncome,
-      previousIncome,
-      currentExpense,
-      previousExpense,
-      incomeDelta,
-      expenseDelta,
+      currentFreeCashflow,
+      previousFreeCashflow,
+      freeCashflowDelta,
+      currentLuxury,
+      previousLuxury,
+      luxuryDelta,
+      currentFire,
+      previousFire,
+      fireDelta,
       mpc: null,
       mps: null,
       rows: months
     };
   }
 
-  const mpc = expenseDelta / incomeDelta;
-  const mps = 1 - mpc;
+  const mpc = luxuryDelta / freeCashflowDelta;
+  const mps = fireDelta / freeCashflowDelta;
 
   return {
     ok: true,
     reason: "",
     currentMonths,
     previousMonths,
-    currentIncome,
-    previousIncome,
-    currentExpense,
-    previousExpense,
-    incomeDelta,
-    expenseDelta,
+    currentFreeCashflow,
+    previousFreeCashflow,
+    freeCashflowDelta,
+    currentLuxury,
+    previousLuxury,
+    luxuryDelta,
+    currentFire,
+    previousFire,
+    fireDelta,
     mpc,
     mps,
     rows: months
@@ -3300,8 +3526,13 @@ function getMonthlyCoreBehaviorRows() {
       label: `${r.month}月`,
       month: r.month,
       regularIncome: 0,
-      coreExpense: 0,
-      saving: 0
+      baseLivingExpense: 0,
+      discretionaryCashflow: 0,
+      fireContribution: 0,
+      luxuryExpense: 0,
+      qualityExpense: 0,
+      travelExpense: 0,
+      idleRetained: 0
     });
   });
 
@@ -3309,31 +3540,36 @@ function getMonthlyCoreBehaviorRows() {
     const month = Number(t.tx_month || 0);
     if (!bucketMap.has(month)) return;
     const row = bucketMap.get(month);
-    if (t.type === "income" && t.cashflow_nature !== "one_time") row.regularIncome += Number(t.amount || 0);
-    if (["expense", "refund"].includes(t.type) && !isTravelOrExceptionalTx(t)) row.coreExpense += netSignedAmount(t);
+    const single = periodCashflowAllocation([t]);
+    row.regularIncome += single.regularIncome;
+    row.baseLivingExpense += single.baseLivingExpense;
+    row.discretionaryCashflow += single.discretionaryCashflow;
+    row.fireContribution += single.fireContribution;
+    row.luxuryExpense += single.luxuryExpense;
+    row.qualityExpense += single.qualityExpense;
+    row.travelExpense += single.travelExpense;
+    row.idleRetained += single.idleRetained;
   });
 
-  return Array.from(bucketMap.values()).map(r => ({
-    ...r,
-    saving: r.regularIncome - r.coreExpense
-  }));
+  return Array.from(bucketMap.values());
 }
 
 function renderFinancialHealthDashboard() {
   const h = financialHealthSummary();
+  const a = h.allocation;
   const m = mpcMpsAnalysis();
   const mpcValue = finiteRatioValue(m.mpc) ? Number(m.mpc) : null;
   const mpsValue = finiteRatioValue(m.mps) ? Number(m.mps) : null;
-  const mpcStatus = mpcValue === null ? "" : (mpcValue < 0.3 ? "good" : mpcValue < 0.6 ? "warn" : "bad");
-  const mpsStatus = mpsValue === null ? "" : (mpsValue > 0.5 ? "good" : mpsValue > 0.3 ? "warn" : "bad");
+  const mpcStatus = mpcValue === null ? "" : (mpcValue <= 0.2 ? "good" : mpcValue <= 0.5 ? "warn" : "bad");
+  const mpsStatus = mpsValue === null ? "" : (mpsValue >= 0.5 ? "good" : mpsValue >= 0.25 ? "warn" : "bad");
 
   return `
     <div class="card financial-health-card">
       <div class="card-title-row">
         <h3>財務健康儀表板</h3>
-        <span class="badge">v62 + v63.1</span>
+        <span class="badge">v63.2 配置版</span>
       </div>
-      <p class="metric-sub">核心支出會排除 cashflow_nature = one_time，以及出國 / 旅行 / 機票 / 飯店等一次性旅遊支出。MPC / MPS 使用近 3 個月平均 vs 前 3 個月平均；資料不足或收入沒有上升時會顯示 N/A。</p>
+      <p class="metric-sub">這版把 MPC / MPS 改成個人現金流配置口徑：先算「常規收入 − 基本生活支出」得到可自由配置現金流，再看流向 FIRE 帳戶、奢侈娛樂、生活品質與保留現金。FIRE 帳戶可在「帳戶 → 資金用途」標記。</p>
 
       <div class="grid cols-4">
         ${metricCard("儲蓄率", pctText(h.savingsRate), "年度收入扣除淨支出", healthMetricStatus("savingsRate", h.savingsRate).className)}
@@ -3343,13 +3579,25 @@ function renderFinancialHealthDashboard() {
       </div>
 
       <div class="grid cols-4">
-        ${metricCard("可控支出率", pctText(h.controllableExpenseRate), "可裁減支出 / 總支出", healthMetricStatus("controllableExpenseRate", h.controllableExpenseRate).className)}
-        ${metricCard("預算偏差率", pctText(h.budgetDeviationRate), "實際 vs 可用預算", healthMetricStatus("budgetDeviationRate", h.budgetDeviationRate).className)}
-        ${metricCard("MPC", ratioText(mpcValue, 2), "個人邊際消費率", mpcStatus)}
-        ${metricCard("MPS", ratioText(mpsValue, 2), "個人邊際儲蓄率", mpsStatus)}
+        ${metricCard("可自由配置現金流", fmtMoney(a.discretionaryCashflow), "常規收入 − 基本生活支出", healthMetricStatus("discretionaryCashflow", a.discretionaryCashflow).className)}
+        ${metricCard("FIRE 配置率", pctText(a.fireRate), `${fmtMoney(a.fireContribution)} 轉入 FIRE`, healthMetricStatus("fireRate", a.fireRate).className)}
+        ${metricCard("奢侈娛樂配置率", pctText(a.luxuryRate), `${fmtMoney(a.luxuryExpense)} 奢侈娛樂`, healthMetricStatus("luxuryRate", a.luxuryRate).className)}
+        ${metricCard("閒置保留率", pctText(a.idleRate), `${fmtMoney(a.idleRetained)} 未配置`, healthMetricStatus("idleRate", a.idleRate).className)}
       </div>
 
-      ${m.reason ? `<p class="metric-sub warn-text">${escapeHtml(m.reason)}</p>` : `<p class="metric-sub">解讀：收入增加時，約 ${fmtNumber(mpcValue * 100, 1)}% 轉成額外核心支出，約 ${fmtNumber(mpsValue * 100, 1)}% 被留下。</p>`}
+      <div class="grid cols-4">
+        ${metricCard("生活品質配置率", pctText(a.qualityRate), `${fmtMoney(a.qualityExpense)} 生活品質`, "")}
+        ${metricCard("出國 / 年度配置率", pctText(a.travelRate), `${fmtMoney(a.travelExpense)} 出國 / 旅行`, "")}
+        ${metricCard("個人 MPC", ratioText(mpcValue, 2), "Δ奢侈娛樂 / Δ自由現金流", mpcStatus)}
+        ${metricCard("個人 MPS", ratioText(mpsValue, 2), "ΔFIRE投入 / Δ自由現金流", mpsStatus)}
+      </div>
+
+      ${m.reason ? `<p class="metric-sub warn-text">${escapeHtml(m.reason)}</p>` : `<p class="metric-sub">解讀：自由現金流增加時，約 ${fmtNumber(mpcValue * 100, 1)}% 流向額外奢侈娛樂，約 ${fmtNumber(mpsValue * 100, 1)}% 流向額外 FIRE / 投資。</p>`}
+
+      <details class="subtle-details" open>
+        <summary>現金流配置明細</summary>
+        ${renderCashflowAllocationTable(a)}
+      </details>
 
       <details class="subtle-details">
         <summary>查看指標明細</summary>
@@ -3363,25 +3611,47 @@ function renderFinancialHealthDashboard() {
       </details>
 
       <details class="subtle-details">
-        <summary>MPC / MPS 計算明細</summary>
+        <summary>個人 MPC / MPS 計算明細</summary>
         ${renderMpcMpsDetailTable(m)}
       </details>
     </div>
   `;
 }
 
+function renderCashflowAllocationTable(a) {
+  const rows = [
+    { item: "常規收入", value: fmtMoney(a.regularIncome), rate: "—", note: "收入且非 one_time" },
+    { item: "基本生活支出", value: fmtMoney(a.baseLivingExpense), rate: "—", note: "生存必要 + 固定非奢侈支出" },
+    { item: "可自由配置現金流", value: fmtMoney(a.discretionaryCashflow), rate: "100%", note: "常規收入扣除基本生活後的可配置池" },
+    { item: "FIRE / 投資投入", value: fmtMoney(a.fireContribution), rate: pctText(a.fireRate), note: "轉入資金用途標記為 FIRE / 投資帳戶" },
+    { item: "奢侈娛樂", value: fmtMoney(a.luxuryExpense), rate: pctText(a.luxuryRate), note: "necessity_level = luxury，不含出國旅行" },
+    { item: "生活品質", value: fmtMoney(a.qualityExpense), rate: pctText(a.qualityRate), note: "necessity_level = quality，排除基本固定支出" },
+    { item: "出國 / 年度型", value: fmtMoney(a.travelExpense), rate: pctText(a.travelRate), note: "出國、旅行、機票、飯店、住宿等" },
+    { item: "閒置 / 未配置", value: fmtMoney(a.idleRetained), rate: pctText(a.idleRate), note: "自由現金流扣除上述配置後的剩餘" }
+  ];
+  return reportTable([
+    { label: "項目", key: "item" },
+    { label: "金額", key: "value" },
+    { label: "占可配置現金流", key: "rate" },
+    { label: "口徑", key: "note" }
+  ], rows);
+}
+
 function renderMpcMpsDetailTable(m) {
   const moneyOrNA = value => finiteRatioValue(value) ? fmtMoney(value) : "N/A";
   const ratioOrNA = value => finiteRatioValue(value) ? fmtNumber(value, 3) : "N/A";
   const rows = [
-    { item: "近 3 個月平均常規收入", value: moneyOrNA(m.currentIncome), note: "收入且非 one_time" },
-    { item: "前 3 個月平均常規收入", value: moneyOrNA(m.previousIncome), note: "比較基準" },
-    { item: "收入變化", value: moneyOrNA(m.incomeDelta), note: "MPC/MPS 的分母" },
-    { item: "近 3 個月平均核心支出", value: moneyOrNA(m.currentExpense), note: "排除出國 / 一次性" },
-    { item: "前 3 個月平均核心支出", value: moneyOrNA(m.previousExpense), note: "比較基準" },
-    { item: "核心支出變化", value: moneyOrNA(m.expenseDelta), note: "MPC 的分子" },
-    { item: "MPC", value: ratioOrNA(m.mpc), note: "核心支出變化 / 收入變化" },
-    { item: "MPS", value: ratioOrNA(m.mps), note: "1 − MPC" }
+    { item: "近 3 個月平均自由現金流", value: moneyOrNA(m.currentFreeCashflow), note: "常規收入 − 基本生活支出" },
+    { item: "前 3 個月平均自由現金流", value: moneyOrNA(m.previousFreeCashflow), note: "比較基準" },
+    { item: "自由現金流變化", value: moneyOrNA(m.freeCashflowDelta), note: "個人 MPC / MPS 的分母" },
+    { item: "近 3 個月平均奢侈娛樂", value: moneyOrNA(m.currentLuxury), note: "necessity_level = luxury" },
+    { item: "前 3 個月平均奢侈娛樂", value: moneyOrNA(m.previousLuxury), note: "比較基準" },
+    { item: "奢侈娛樂變化", value: moneyOrNA(m.luxuryDelta), note: "個人 MPC 的分子" },
+    { item: "近 3 個月平均 FIRE 投入", value: moneyOrNA(m.currentFire), note: "轉入 FIRE / 投資帳戶" },
+    { item: "前 3 個月平均 FIRE 投入", value: moneyOrNA(m.previousFire), note: "比較基準" },
+    { item: "FIRE 投入變化", value: moneyOrNA(m.fireDelta), note: "個人 MPS 的分子" },
+    { item: "個人 MPC", value: ratioOrNA(m.mpc), note: "奢侈娛樂變化 / 自由現金流變化" },
+    { item: "個人 MPS", value: ratioOrNA(m.mps), note: "FIRE 投入變化 / 自由現金流變化" }
   ];
   return reportTable([
     { label: "項目", key: "item" },
@@ -3389,7 +3659,6 @@ function renderMpcMpsDetailTable(m) {
     { label: "備註", key: "note" }
   ], rows);
 }
-
 
 function renderGlobalBudgetContributionRecords() {
   const rows = globalBudgetContributionRowsForSelectedYear();
@@ -3556,16 +3825,17 @@ function renderBudgetItemTable(rows) {
                 <strong>${escapeHtml(i.name)} <span class="badge ${status.className}">${escapeHtml(status.label)}</span></strong>
                 <span>${escapeHtml(labelOf(i.item_type))} · ${escapeHtml(i.category_name || "未分類")} · ${escapeHtml(i.scope_label)}</span>
               </div>
-              <div class="mobile-amount">${fmtMoney(i.current_budget_amount)}</div>
+              <div class="mobile-amount">${fmtMoney(budgetItemSpendableAmount(i))}<span class="amount-caption">${escapeHtml(budgetItemSpendableLabel(i))}</span></div>
             </div>
             <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
             <div class="mobile-data-meta">
               <span>${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
               <span>${escapeHtml(isMonth ? `${i.current_month}月視角` : "年度視角")}</span>
               <span>實際 ${fmtMoney(i.actual_amount)}</span>
-              <span>${Number(i.remaining_amount || 0) >= 0 ? `剩餘 ${fmtMoney(i.remaining_amount)}` : `超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
+              <span>${Number(i.remaining_amount || 0) >= 0 ? `本週期剩餘 ${fmtMoney(i.remaining_amount)}` : `本週期超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
               <span>${fmtNumber(pct, 1)}%</span>
-              ${isScoped ? `<span>累積資訊：可用 ${fmtMoney(i.year_budget_amount)} / 實際 ${fmtMoney(i.year_actual_amount)} / 剩餘 ${fmtMoney(i.year_remaining_amount)}</span>` : ""}
+              ${renderBudgetItemRolloverMeta(i)}
+              ${isScoped ? `<span>累積資訊：年度可用 ${fmtMoney(i.year_budget_amount)} / 累積實際 ${fmtMoney(i.year_actual_amount)} / 累積剩餘 ${fmtMoney(i.year_remaining_amount)}</span>` : ""}
             </div>
             <div class="mobile-card-actions">
               <button class="btn small secondary" type="button" data-edit-budget="${i.budget_item_id}">編輯</button>
@@ -3581,7 +3851,7 @@ function renderBudgetItemTable(rows) {
   const tableView = `
     <div class="table-wrap desktop-table">
       <table>
-        <thead><tr><th>名稱</th><th>狀態</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>可用</th><th>實際</th><th>剩餘</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>狀態</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>主數字</th><th>實際</th><th>本週期剩餘</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
         <tbody>
           ${rows.map(i => {
             const pct = Number(i.used_pct || 0);
@@ -3599,7 +3869,7 @@ function renderBudgetItemTable(rows) {
                   <div class="muted">${escapeHtml(i.funding_label)}${i.movement_net ? `｜本視角移轉淨額 ${fmtMoney(i.movement_net)}` : ""}</div>
                 </td>
                 <td><span class="badge">${escapeHtml(i.scope_label)}</span></td>
-                <td class="mono">${fmtMoney(i.current_budget_amount)}</td>
+                <td class="mono">${fmtMoney(budgetItemSpendableAmount(i))}<div class="metric-sub">${escapeHtml(budgetItemSpendableLabel(i))}</div></td>
                 <td class="mono bad">${fmtMoney(i.actual_amount)}</td>
                 <td class="mono ${Number(i.remaining_amount || 0) >= 0 ? "good" : "bad"}">${fmtMoney(i.remaining_amount)}</td>
                 <td>
@@ -3645,7 +3915,8 @@ function renderAccounts() {
           <option value="false" ${edit?.is_active === false ? "selected" : ""}>停用</option>
         </select>`)}
         ${field("預算驗算", accountCoverageSelect(accountCoverageMode(edit?.note || "")))}
-        <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(stripAccountCoverageMarker(edit?.note || ""))}</textarea></div>
+        ${field("資金用途", accountPurposeSelect(accountPurposeMode(edit?.note || "")))}
+        <div class="field wide"><label>備註</label><textarea class="input" name="note">${escapeHtml(cleanAccountNoteForEdit(edit?.note || ""))}</textarea></div>
         <div class="wide btn-row">
           <button class="btn" type="submit">${edit ? "儲存修改" : "新增帳戶"}</button>
           ${edit ? `<button class="btn secondary" type="button" data-cancel-edit="account">取消編輯</button>` : ""}
@@ -3664,13 +3935,14 @@ function renderAccountTable(rows) {
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>名稱</th><th>類型</th><th>預算驗算</th><th>初始餘額</th><th>目前餘額</th><th>狀態</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>類型</th><th>預算驗算</th><th>資金用途</th><th>初始餘額</th><th>目前餘額</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody>
           ${rows.map(a => `
             <tr>
               <td>${escapeHtml(a.name)}</td>
               <td><span class="badge">${escapeHtml(labelOf(a.type))}</span></td>
               <td><span class="badge">${escapeHtml(accountCoverageLabel(accountCoverageMode(a.note || "")))}</span></td>
+              <td><span class="badge">${escapeHtml(accountPurposeLabel(accountPurposeMode(a.note || "")))}</span></td>
               <td class="mono">${fmtMoney(a.initial_balance)}</td>
               <td class="mono ${Number(a.current_balance || 0) >= 0 ? "good" : "bad"}">${fmtMoney(a.current_balance)}</td>
               <td>${a.is_active ? "啟用" : "停用"}</td>
@@ -6612,7 +6884,7 @@ async function saveBudgetItem(form) {
     rollover_mode: d.rollover_mode || "none",
     sort_order: Number(d.sort_order || 0),
     is_active: boolValue(d.is_active),
-    note: d.note
+    note: mergeBudgetItemNote(d.note, state.data.budgetItems.find(item => item.id === d.id)?.note || "")
   };
   return await upsert("budget_items", payload, { expect: { name: payload.name, planned_amount: payload.planned_amount } });
 }
@@ -6625,7 +6897,7 @@ async function saveAccount(form) {
     type: d.type || "bank",
     initial_balance: numberOrZero(d.initial_balance),
     opening_date: d.opening_date,
-    note: applyAccountCoverageMarker(d.note, d.coverage_mode || "auto"),
+    note: applyAccountPurposeMarker(applyAccountCoverageMarker(d.note, d.coverage_mode || "auto"), d.purpose_mode || "auto"),
     sort_order: Number(d.sort_order || 0),
     is_active: boolValue(d.is_active)
   };

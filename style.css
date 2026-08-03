@@ -2022,3 +2022,5 @@ td.actions { width: 126px; }
     flex: 0 0 auto;
   }
 }
+
+.mobile-amount .amount-caption{display:block;font-size:11px;font-weight:600;opacity:.65;margin-top:3px;}
