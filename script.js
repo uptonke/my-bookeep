@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v63.4-rollover-cumulative-view";
+const APP_VERSION = "v63.5-rollover-close-fix";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -7171,15 +7171,20 @@ async function closeBudgetItemCycle(itemId) {
     return;
   }
 
-  const carry = Math.round(Number(row.remaining_amount || 0));
+  // 結轉型預算的主口徑是年度累積：只要累積仍有餘額，就允許結帳。
+  // 非結轉型仍沿用目前週期剩餘，避免把其他模式的歷史金額重複承接。
+  const useCumulativeCarry = budgetItemUsesRolloverBalance(row);
+  const carry = Math.round(Number(useCumulativeCarry ? row.year_remaining_amount : row.remaining_amount) || 0);
+  const carryScopeLabel = useCumulativeCarry ? "累積剩餘" : "本週期剩餘";
+
   if (carry < 0) {
-    showAlert(`不能結帳：${row.name} 目前超支 ${fmtMoney(Math.abs(carry))}。請先補洞或移轉預算。`, "bad");
+    showAlert(`不能結帳：${row.name} ${carryScopeLabel}已超支 ${fmtMoney(Math.abs(carry))}。請先補洞或移轉預算。`, "bad");
     return;
   }
 
   const ok = await confirmAction(
     "預算項目結帳",
-    `確定要結帳「${row.name}」？\n\n目前週期剩餘銀彈：${fmtMoney(carry)}\n結帳後主畫面會變成：\n可用 ${fmtMoney(carry)}\n實際 $0\n剩餘 ${fmtMoney(carry)}\n\n累積資訊仍會保留歷史可用 / 實際 / 剩餘。`
+    `確定要結帳「${row.name}」？\n\n本次依「${carryScopeLabel}」承接：${fmtMoney(carry)}\n結帳後主畫面會變成：\n可用 ${fmtMoney(carry)}\n實際 $0\n剩餘 ${fmtMoney(carry)}\n\n累積資訊仍會保留歷史可用 / 實際 / 剩餘。`
   );
   if (!ok) return;
 
