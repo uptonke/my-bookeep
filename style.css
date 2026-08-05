@@ -2025,6 +2025,143 @@ td.actions { width: 126px; }
 
 .mobile-amount .amount-caption{display:block;font-size:11px;font-weight:600;opacity:.65;margin-top:3px;}
 
+
+/* v63.4：年度預算表格重排，避免欄位過多造成中文字逐字換行。 */
+.budget-items-wrap {
+  overflow-x: auto;
+}
+
+.budget-items-table {
+  min-width: 1180px;
+  table-layout: fixed;
+}
+
+.budget-items-table .budget-col-name { width: 128px; }
+.budget-items-table .budget-col-status { width: 86px; }
+.budget-items-table .budget-col-category { width: 126px; }
+.budget-items-table .budget-col-mode { width: 250px; }
+.budget-items-table .budget-col-spendable { width: 132px; }
+.budget-items-table .budget-col-cycle { width: 170px; }
+.budget-items-table .budget-col-progress { width: 250px; }
+.budget-items-table .budget-col-actions { width: 132px; }
+
+.budget-items-table th,
+.budget-items-table td {
+  padding: 14px 12px;
+  vertical-align: middle;
+}
+
+.budget-items-table th {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.budget-items-table .badge,
+.budget-items-table .btn,
+.budget-items-table .budget-primary-number,
+.budget-items-table .budget-value-row strong {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.budget-item-name {
+  display: block;
+  line-height: 1.45;
+  font-size: 14px;
+}
+
+.budget-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.budget-cell-sub,
+.budget-progress-meta,
+.budget-progress-note {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: .72;
+}
+
+.budget-primary-number {
+  display: block;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.budget-cycle-cell {
+  display: grid;
+  gap: 8px;
+}
+
+.budget-value-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.budget-value-row strong {
+  font-size: 13px;
+}
+
+.budget-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 7px;
+  font-size: 12px;
+}
+
+.budget-progress-head strong {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.budget-progress-cell .progress {
+  width: 100%;
+  height: 9px;
+}
+
+.budget-progress-note {
+  padding-top: 5px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.budget-actions-cell {
+  width: auto;
+}
+
+.budget-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.budget-action-grid .btn {
+  width: 100%;
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
+.budget-action-grid .danger {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 761px) and (max-width: 1250px) {
+  .budget-items-table {
+    min-width: 1080px;
+  }
+
+  .budget-items-table .budget-col-mode { width: 220px; }
+  .budget-items-table .budget-col-progress { width: 220px; }
+}
+
 /* v64：畫面文字統一為白色。保留背景、邊框與圖表資料色。 */
 @media screen {
   body,

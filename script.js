@@ -3886,44 +3886,89 @@ function renderBudgetItemTable(rows) {
   `;
 
   const tableView = `
-    <div class="table-wrap desktop-table">
-      <table>
-        <thead><tr><th>名稱</th><th>狀態</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>主數字</th><th>實際</th><th>本週期差額</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
+    <div class="table-wrap desktop-table budget-items-wrap">
+      <table class="budget-items-table">
+        <colgroup>
+          <col class="budget-col-name">
+          <col class="budget-col-status">
+          <col class="budget-col-category">
+          <col class="budget-col-mode">
+          <col class="budget-col-spendable">
+          <col class="budget-col-cycle">
+          <col class="budget-col-progress">
+          <col class="budget-col-actions">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>名稱</th>
+            <th>狀態</th>
+            <th>分類 / 類型</th>
+            <th>模式 / 視角</th>
+            <th>目前可花</th>
+            <th>實際 / 差額</th>
+            <th>累積進度</th>
+            <th>操作</th>
+          </tr>
+        </thead>
         <tbody>
           ${rows.map(i => {
             const usage = budgetItemUsageMetrics(i);
             const pct = usage.pct;
             const progressPct = pct === null ? 0 : pct;
             const status = budgetItemStatus(i);
-            const isMonth = i.primary_scope === "month";
-            const isScoped = i.primary_scope !== "year";
             const isRollover = usage.cumulative;
+            const progressLabel = isRollover ? "累積使用率" : "使用率";
+            const progressAvailable = isRollover ? i.year_budget_amount : i.current_budget_amount;
+            const progressRemaining = isRollover ? i.year_remaining_amount : i.remaining_amount;
             return `
               <tr>
-                <td>${escapeHtml(i.name)}</td>
-                <td><span class="badge ${status.className}">${escapeHtml(status.label)}</span></td>
-                <td><span class="badge">${escapeHtml(labelOf(i.item_type))}</span></td>
-                <td>${escapeHtml(i.category_name || "")}</td>
-                <td>
-                  <span class="badge">${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
-                  <div class="muted">${escapeHtml(i.funding_label)}${i.movement_net ? `｜本視角移轉淨額 ${fmtMoney(i.movement_net)}` : ""}</div>
+                <td class="budget-name-cell">
+                  <strong class="budget-item-name">${escapeHtml(i.name)}</strong>
                 </td>
-                <td><span class="badge">${escapeHtml(i.scope_label)}</span></td>
-                <td class="mono">${fmtMoney(budgetItemSpendableAmount(i))}<div class="metric-sub">${escapeHtml(budgetItemSpendableLabel(i))}</div></td>
-                <td class="mono bad">${fmtMoney(i.actual_amount)}<div class="metric-sub">${isRollover ? "本週期實際" : "目前視角"}</div></td>
-                <td class="mono ${budgetItemCycleBalanceClass(i)}">${fmtMoney(budgetItemCycleBalanceAmount(i))}<div class="metric-sub">${budgetItemCycleBalanceLabel(i)}</div></td>
-                <td>
+                <td class="budget-status-cell">
+                  <span class="badge ${status.className}">${escapeHtml(status.label)}</span>
+                </td>
+                <td class="budget-category-cell">
+                  <span class="badge">${escapeHtml(labelOf(i.item_type))}</span>
+                  <div class="budget-cell-sub">${escapeHtml(i.category_name || "未分類")}</div>
+                </td>
+                <td class="budget-mode-cell">
+                  <div class="budget-badge-row">
+                    <span class="badge">${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
+                    <span class="badge">${escapeHtml(i.scope_label)}</span>
+                  </div>
+                  <div class="budget-cell-sub">${escapeHtml(i.funding_label)}</div>
+                  ${i.movement_net ? `<div class="budget-cell-sub">本視角移轉淨額 ${fmtMoney(i.movement_net)}</div>` : ""}
+                </td>
+                <td class="budget-spendable-cell mono">
+                  <strong class="budget-primary-number">${fmtMoney(budgetItemSpendableAmount(i))}</strong>
+                  <div class="budget-cell-sub">${escapeHtml(budgetItemSpendableLabel(i))}</div>
+                </td>
+                <td class="budget-cycle-cell mono">
+                  <div class="budget-value-row">
+                    <span>${isRollover ? "本週期實際" : "實際"}</span>
+                    <strong>${fmtMoney(i.actual_amount)}</strong>
+                  </div>
+                  <div class="budget-value-row ${budgetItemCycleBalanceClass(i)}">
+                    <span>${budgetItemCycleBalanceLabel(i)}</span>
+                    <strong>${fmtMoney(budgetItemCycleBalanceAmount(i))}</strong>
+                  </div>
+                </td>
+                <td class="budget-progress-cell">
+                  <div class="budget-progress-head">
+                    <span>${escapeHtml(progressLabel)}</span>
+                    <strong>${pct === null ? "—" : `${fmtNumber(pct, 1)}%`}</strong>
+                  </div>
                   <div class="${pct !== null && pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, progressPct))}%"></span></div>
-                  <span class="muted">${pct === null ? "—" : `${fmtNumber(pct, 1)}%`}</span>
-                  <div class="metric-sub">${isRollover ? "累積口徑" : "目前視角"}</div>
+                  <div class="budget-progress-meta">可用 ${fmtMoney(progressAvailable)}｜剩餘 ${fmtMoney(progressRemaining)}</div>
+                  ${isRollover && Number(i.remaining_amount || 0) < 0 && Number(i.year_remaining_amount || 0) >= 0 ? `<div class="budget-progress-note">本週期缺口已由累積餘額吸收</div>` : ""}
                 </td>
-                <td class="muted">
-                  ${(isRollover || isScoped) ? `累積：可用 ${fmtMoney(i.year_budget_amount)}｜實際 ${fmtMoney(i.year_actual_amount)}｜剩餘 ${fmtMoney(i.year_remaining_amount)}${isRollover && Number(i.remaining_amount || 0) < 0 && Number(i.year_remaining_amount || 0) >= 0 ? "｜本週期缺口已由累積餘額吸收" : ""}` : "—"}
-                </td>
-                <td class="actions">
-                  <button class="btn small secondary" data-edit-budget="${i.budget_item_id}">編輯</button>
-                  <button class="btn small secondary" type="button" data-close-budget="${i.budget_item_id}">結帳</button>
-                  <button type="button" class="btn small danger" data-delete="budget_items:${i.budget_item_id}">刪除</button>
+                <td class="actions budget-actions-cell">
+                  <div class="budget-action-grid">
+                    <button class="btn small secondary" data-edit-budget="${i.budget_item_id}">編輯</button>
+                    <button class="btn small secondary" type="button" data-close-budget="${i.budget_item_id}">結帳</button>
+                    <button type="button" class="btn small danger" data-delete="budget_items:${i.budget_item_id}">刪除</button>
+                  </div>
                 </td>
               </tr>
             `;
