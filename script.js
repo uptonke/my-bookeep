@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v63.3-rollover-note-fix";
+const APP_VERSION = "v63.4-rollover-cumulative-view";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -2981,10 +2981,44 @@ function budgetItemCarryInAmount(row) {
   return Number(row?.year_remaining_amount || 0) - Number(row?.remaining_amount || 0);
 }
 
+function budgetItemUsageMetrics(row) {
+  const cumulative = budgetItemUsesRolloverBalance(row);
+  const budgetAmount = Number(cumulative ? row?.year_budget_amount : row?.current_budget_amount || 0);
+  const rawPct = Number(cumulative ? row?.year_used_pct : row?.used_pct || 0);
+  return {
+    cumulative,
+    budgetAmount,
+    pct: budgetAmount > 0 && Number.isFinite(rawPct) ? rawPct : null,
+    remaining: Number(cumulative ? row?.year_remaining_amount : row?.remaining_amount || 0),
+    actual: Number(cumulative ? row?.year_actual_amount : row?.actual_amount || 0)
+  };
+}
+
+function budgetItemCycleBalanceLabel(row) {
+  const remaining = Number(row?.remaining_amount || 0);
+  if (remaining >= 0) return "本週期剩餘";
+  return budgetItemUsesRolloverBalance(row) ? "本週期缺口" : "本週期超支";
+}
+
+function budgetItemCycleBalanceAmount(row) {
+  const remaining = Number(row?.remaining_amount || 0);
+  return remaining < 0 ? Math.abs(remaining) : remaining;
+}
+
+function budgetItemCycleBalanceClass(row) {
+  const remaining = Number(row?.remaining_amount || 0);
+  if (remaining >= 0) return "good";
+  return budgetItemUsesRolloverBalance(row) ? "warn" : "bad";
+}
+
 function renderBudgetItemRolloverMeta(row) {
   if (!budgetItemUsesRolloverBalance(row)) return "";
-  const carry = budgetItemCarryInAmount(row);
-  return `<span>目前總可花 ${fmtMoney(row.year_remaining_amount)} = 本週期剩餘 ${fmtMoney(row.remaining_amount)}${Math.abs(carry) > 0 ? ` + 前期承接 ${fmtMoney(carry)}` : ""}</span>`;
+  const cycleRemaining = Number(row?.remaining_amount || 0);
+  const annualRemaining = Number(row?.year_remaining_amount || 0);
+  const absorbed = cycleRemaining < 0 && annualRemaining >= 0
+    ? "；本週期缺口由累積結轉餘額吸收"
+    : "";
+  return `<span>累積：可用 ${fmtMoney(row.year_budget_amount)} / 實際 ${fmtMoney(row.year_actual_amount)} / 剩餘 ${fmtMoney(annualRemaining)}${absorbed}</span>`;
 }
 
 
@@ -3131,23 +3165,24 @@ function pctStatusClass(pct, remaining = 0) {
 }
 
 function budgetItemStatus(row) {
-  const pct = Number(row?.used_pct || 0);
-  const remaining = Number(row?.remaining_amount || 0);
-  if (remaining < 0 || pct > 100) return { key: "overspent", label: "超支", className: "bad" };
-  if (pct >= 90) return { key: "near", label: "接近上限", className: "warn" };
-  if (pct >= 70) return { key: "watch", label: "注意", className: "warn" };
-  if (Number(row?.actual_amount || 0) > 0) return { key: "active", label: "有支出", className: "good" };
+  const usage = budgetItemUsageMetrics(row);
+  const pct = usage.pct;
+  if (usage.remaining < 0 || (pct !== null && pct > 100)) return { key: "overspent", label: "超支", className: "bad" };
+  if (pct !== null && pct >= 90) return { key: "near", label: "接近上限", className: "warn" };
+  if (pct !== null && pct >= 70) return { key: "watch", label: "注意", className: "warn" };
+  if (usage.actual > 0) return { key: "active", label: "有支出", className: "good" };
   return { key: "normal", label: "正常", className: "good" };
 }
 
 function budgetItemFilterMatches(row, mode) {
   const status = budgetItemStatus(row);
+  const usage = budgetItemUsageMetrics(row);
   const nameText = `${row?.name || ""} ${row?.category_name || ""}`.toLowerCase();
   if (!mode || mode === "all") return true;
-  if (mode === "focus") return ["overspent", "near", "watch"].includes(status.key) || Number(row.actual_amount || 0) > 0;
+  if (mode === "focus") return ["overspent", "near", "watch"].includes(status.key) || usage.actual > 0;
   if (mode === "watch") return ["overspent", "near", "watch"].includes(status.key);
   if (mode === "overspent") return status.key === "overspent";
-  if (mode === "spent") return Number(row.actual_amount || 0) > 0;
+  if (mode === "spent") return usage.actual > 0;
   if (mode === "travel") return /(出國|旅行|旅遊|機票|飯店|住宿|交通)/i.test(nameText);
   if (mode === "luxury") return /(娛樂|餐飲|高端|fine|live|music|comedy|電影|服飾|購物)/i.test(nameText);
   return true;
@@ -3792,7 +3827,7 @@ function renderBudget() {
         <h3>預算項目</h3>
         <span class="badge">${items.length}/${allItems.length} 項</span>
       </div>
-      <p class="metric-sub">可用篩選快速看「注意 / 接近 / 超支」項目；狀態以目前視角的使用率與剩餘額判斷。</p>
+      <p class="metric-sub">可用篩選快速看「注意 / 接近 / 超支」項目；結轉型以年度累積可用額、實際與剩餘判斷，本週期缺口只作次要資訊。</p>
       ${renderBudgetItemFilterTabs(allItems)}
       ${renderBudgetItemTable(items)}
     </div>
@@ -3814,10 +3849,13 @@ function renderBudgetItemTable(rows) {
   const mobileCards = `
     <div class="mobile-card-list">
       ${rows.map(i => {
-        const pct = Number(i.used_pct || 0);
+        const usage = budgetItemUsageMetrics(i);
+        const pct = usage.pct;
+        const progressPct = pct === null ? 0 : pct;
         const status = budgetItemStatus(i);
         const isMonth = i.primary_scope === "month";
         const isScoped = i.primary_scope !== "year";
+        const isRollover = usage.cumulative;
         return `
           <div class="mobile-data-card">
             <div class="mobile-data-head">
@@ -3827,15 +3865,14 @@ function renderBudgetItemTable(rows) {
               </div>
               <div class="mobile-amount">${fmtMoney(budgetItemSpendableAmount(i))}<span class="amount-caption">${escapeHtml(budgetItemSpendableLabel(i))}</span></div>
             </div>
-            <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
+            <div class="${pct !== null && pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, progressPct))}%"></span></div>
             <div class="mobile-data-meta">
               <span>${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
               <span>${escapeHtml(isMonth ? `${i.current_month}月視角` : "年度視角")}</span>
-              <span>實際 ${fmtMoney(i.actual_amount)}</span>
-              <span>${Number(i.remaining_amount || 0) >= 0 ? `本週期剩餘 ${fmtMoney(i.remaining_amount)}` : `本週期超支 ${fmtMoney(Math.abs(Number(i.remaining_amount || 0)))}`}</span>
-              <span>${fmtNumber(pct, 1)}%</span>
-              ${renderBudgetItemRolloverMeta(i)}
-              ${isScoped ? `<span>累積資訊：年度可用 ${fmtMoney(i.year_budget_amount)} / 累積實際 ${fmtMoney(i.year_actual_amount)} / 累積剩餘 ${fmtMoney(i.year_remaining_amount)}</span>` : ""}
+              <span>${isRollover ? "本週期實際" : "實際"} ${fmtMoney(i.actual_amount)}</span>
+              <span>${budgetItemCycleBalanceLabel(i)} ${fmtMoney(budgetItemCycleBalanceAmount(i))}</span>
+              <span>${isRollover ? "累積使用率" : "使用率"} ${pct === null ? "—" : `${fmtNumber(pct, 1)}%`}</span>
+              ${isRollover ? renderBudgetItemRolloverMeta(i) : (isScoped ? `<span>累積資訊：年度可用 ${fmtMoney(i.year_budget_amount)} / 累積實際 ${fmtMoney(i.year_actual_amount)} / 累積剩餘 ${fmtMoney(i.year_remaining_amount)}</span>` : "")}
             </div>
             <div class="mobile-card-actions">
               <button class="btn small secondary" type="button" data-edit-budget="${i.budget_item_id}">編輯</button>
@@ -3851,13 +3888,16 @@ function renderBudgetItemTable(rows) {
   const tableView = `
     <div class="table-wrap desktop-table">
       <table>
-        <thead><tr><th>名稱</th><th>狀態</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>主數字</th><th>實際</th><th>本週期剩餘</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
+        <thead><tr><th>名稱</th><th>狀態</th><th>類型</th><th>分類</th><th>模式</th><th>視角</th><th>主數字</th><th>實際</th><th>本週期差額</th><th>使用率</th><th>累積資訊</th><th>操作</th></tr></thead>
         <tbody>
           ${rows.map(i => {
-            const pct = Number(i.used_pct || 0);
+            const usage = budgetItemUsageMetrics(i);
+            const pct = usage.pct;
+            const progressPct = pct === null ? 0 : pct;
             const status = budgetItemStatus(i);
             const isMonth = i.primary_scope === "month";
-        const isScoped = i.primary_scope !== "year";
+            const isScoped = i.primary_scope !== "year";
+            const isRollover = usage.cumulative;
             return `
               <tr>
                 <td>${escapeHtml(i.name)}</td>
@@ -3870,14 +3910,15 @@ function renderBudgetItemTable(rows) {
                 </td>
                 <td><span class="badge">${escapeHtml(i.scope_label)}</span></td>
                 <td class="mono">${fmtMoney(budgetItemSpendableAmount(i))}<div class="metric-sub">${escapeHtml(budgetItemSpendableLabel(i))}</div></td>
-                <td class="mono bad">${fmtMoney(i.actual_amount)}</td>
-                <td class="mono ${Number(i.remaining_amount || 0) >= 0 ? "good" : "bad"}">${fmtMoney(i.remaining_amount)}</td>
+                <td class="mono bad">${fmtMoney(i.actual_amount)}<div class="metric-sub">${isRollover ? "本週期實際" : "目前視角"}</div></td>
+                <td class="mono ${budgetItemCycleBalanceClass(i)}">${fmtMoney(budgetItemCycleBalanceAmount(i))}<div class="metric-sub">${budgetItemCycleBalanceLabel(i)}</div></td>
                 <td>
-                  <div class="${pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
-                  <span class="muted">${fmtNumber(pct, 1)}%</span>
+                  <div class="${pct !== null && pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, progressPct))}%"></span></div>
+                  <span class="muted">${pct === null ? "—" : `${fmtNumber(pct, 1)}%`}</span>
+                  <div class="metric-sub">${isRollover ? "累積口徑" : "目前視角"}</div>
                 </td>
                 <td class="muted">
-                  ${isScoped ? `累積：可用 ${fmtMoney(i.year_budget_amount)}｜實際 ${fmtMoney(i.year_actual_amount)}｜剩餘 ${fmtMoney(i.year_remaining_amount)}` : "—"}
+                  ${(isRollover || isScoped) ? `累積：可用 ${fmtMoney(i.year_budget_amount)}｜實際 ${fmtMoney(i.year_actual_amount)}｜剩餘 ${fmtMoney(i.year_remaining_amount)}${isRollover && Number(i.remaining_amount || 0) < 0 && Number(i.year_remaining_amount || 0) >= 0 ? "｜本週期缺口已由累積餘額吸收" : ""}` : "—"}
                 </td>
                 <td class="actions">
                   <button class="btn small secondary" data-edit-budget="${i.budget_item_id}">編輯</button>
