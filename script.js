@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v63.5-rollover-close-fix";
+const APP_VERSION = "v63.6-cycle-progress-reset";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -2968,12 +2968,13 @@ function budgetItemUsesRolloverBalance(row) {
 
 function budgetItemSpendableAmount(row) {
   if (!budgetItemUsesRolloverBalance(row)) return Number(row?.current_budget_amount || 0);
-  return Number(row?.year_remaining_amount ?? row?.remaining_amount ?? 0);
+  // 結轉型主畫面只看目前視角的剩餘額；結帳後就是新週期真正還能花的金額。
+  return Number(row?.remaining_amount ?? row?.current_budget_amount ?? 0);
 }
 
 function budgetItemSpendableLabel(row) {
   if (!budgetItemUsesRolloverBalance(row)) return "目前可用";
-  return "目前總可花";
+  return "目前可花";
 }
 
 function budgetItemCarryInAmount(row) {
@@ -2981,23 +2982,34 @@ function budgetItemCarryInAmount(row) {
   return Number(row?.year_remaining_amount || 0) - Number(row?.remaining_amount || 0);
 }
 
+function budgetItemScopeName(row) {
+  if (row?.primary_scope === "cycle") return "本週期";
+  if (row?.primary_scope === "month") return `${row?.current_month || currentBudgetMonth()}月`;
+  return "年度";
+}
+
 function budgetItemUsageMetrics(row) {
-  const cumulative = budgetItemUsesRolloverBalance(row);
-  const budgetAmount = Number(cumulative ? row?.year_budget_amount : row?.current_budget_amount || 0);
-  const rawPct = Number(cumulative ? row?.year_used_pct : row?.used_pct || 0);
+  // 主表進度永遠跟隨目前視角。結帳後 primary_scope = cycle，
+  // 因此新週期會從承接額、實際 0、使用率 0% 重新開始。
+  const budgetAmount = Number(row?.current_budget_amount || 0);
+  const rawPct = Number(row?.used_pct || 0);
   return {
-    cumulative,
+    rollover: budgetItemUsesRolloverBalance(row),
+    scope: row?.primary_scope || "year",
     budgetAmount,
     pct: budgetAmount > 0 && Number.isFinite(rawPct) ? rawPct : null,
-    remaining: Number(cumulative ? row?.year_remaining_amount : row?.remaining_amount || 0),
-    actual: Number(cumulative ? row?.year_actual_amount : row?.actual_amount || 0)
+    remaining: Number(row?.remaining_amount || 0),
+    actual: Number(row?.actual_amount || 0)
   };
 }
 
 function budgetItemCycleBalanceLabel(row) {
   const remaining = Number(row?.remaining_amount || 0);
-  if (remaining >= 0) return "本週期剩餘";
-  return budgetItemUsesRolloverBalance(row) ? "本週期缺口" : "本週期超支";
+  const scopeName = budgetItemScopeName(row);
+  if (remaining >= 0) return `${scopeName}剩餘`;
+  return budgetItemUsesRolloverBalance(row) && row?.primary_scope === "cycle"
+    ? `${scopeName}缺口`
+    : `${scopeName}超支`;
 }
 
 function budgetItemCycleBalanceAmount(row) {
@@ -3008,7 +3020,7 @@ function budgetItemCycleBalanceAmount(row) {
 function budgetItemCycleBalanceClass(row) {
   const remaining = Number(row?.remaining_amount || 0);
   if (remaining >= 0) return "good";
-  return budgetItemUsesRolloverBalance(row) ? "warn" : "bad";
+  return budgetItemUsesRolloverBalance(row) && row?.primary_scope === "cycle" ? "warn" : "bad";
 }
 
 function renderBudgetItemRolloverMeta(row) {
@@ -3827,7 +3839,7 @@ function renderBudget() {
         <h3>預算項目</h3>
         <span class="badge">${items.length}/${allItems.length} 項</span>
       </div>
-      <p class="metric-sub">可用篩選快速看「注意 / 接近 / 超支」項目；結轉型以年度累積可用額、實際與剩餘判斷，本週期缺口只作次要資訊。</p>
+      <p class="metric-sub">可用篩選快速看「注意 / 接近 / 超支」項目；結轉型結帳後只以新週期的可用額、實際與剩餘判斷，舊週期與年度累積留在結帳紀錄及報表。</p>
       ${renderBudgetItemFilterTabs(allItems)}
       ${renderBudgetItemTable(items)}
     </div>
@@ -3853,9 +3865,8 @@ function renderBudgetItemTable(rows) {
         const pct = usage.pct;
         const progressPct = pct === null ? 0 : pct;
         const status = budgetItemStatus(i);
-        const isMonth = i.primary_scope === "month";
         const isScoped = i.primary_scope !== "year";
-        const isRollover = usage.cumulative;
+        const isRollover = usage.rollover;
         return `
           <div class="mobile-data-card">
             <div class="mobile-data-head">
@@ -3868,11 +3879,11 @@ function renderBudgetItemTable(rows) {
             <div class="${pct !== null && pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, progressPct))}%"></span></div>
             <div class="mobile-data-meta">
               <span>${escapeHtml(i.mode_name || (i.is_contribution_mode ? "提撥型" : "固定型"))}</span>
-              <span>${escapeHtml(isMonth ? `${i.current_month}月視角` : "年度視角")}</span>
-              <span>${isRollover ? "本週期實際" : "實際"} ${fmtMoney(i.actual_amount)}</span>
+              <span>${escapeHtml(`${i.scope_label}視角`)}</span>
+              <span>${budgetItemScopeName(i)}實際 ${fmtMoney(usage.actual)}</span>
               <span>${budgetItemCycleBalanceLabel(i)} ${fmtMoney(budgetItemCycleBalanceAmount(i))}</span>
-              <span>${isRollover ? "累積使用率" : "使用率"} ${pct === null ? "—" : `${fmtNumber(pct, 1)}%`}</span>
-              ${isRollover ? renderBudgetItemRolloverMeta(i) : (isScoped ? `<span>累積資訊：年度可用 ${fmtMoney(i.year_budget_amount)} / 累積實際 ${fmtMoney(i.year_actual_amount)} / 累積剩餘 ${fmtMoney(i.year_remaining_amount)}</span>` : "")}
+              <span>${budgetItemScopeName(i)}使用率 ${pct === null ? "—" : `${fmtNumber(pct, 1)}%`}</span>
+              ${!isRollover && isScoped ? `<span>年度資訊：可用 ${fmtMoney(i.year_budget_amount)} / 實際 ${fmtMoney(i.year_actual_amount)} / 剩餘 ${fmtMoney(i.year_remaining_amount)}</span>` : ""}
             </div>
             <div class="mobile-card-actions">
               <button class="btn small secondary" type="button" data-edit-budget="${i.budget_item_id}">編輯</button>
@@ -3906,7 +3917,7 @@ function renderBudgetItemTable(rows) {
             <th>模式 / 視角</th>
             <th>目前可花</th>
             <th>實際 / 差額</th>
-            <th>累積進度</th>
+            <th>目前進度</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -3916,10 +3927,9 @@ function renderBudgetItemTable(rows) {
             const pct = usage.pct;
             const progressPct = pct === null ? 0 : pct;
             const status = budgetItemStatus(i);
-            const isRollover = usage.cumulative;
-            const progressLabel = isRollover ? "累積使用率" : "使用率";
-            const progressAvailable = isRollover ? i.year_budget_amount : i.current_budget_amount;
-            const progressRemaining = isRollover ? i.year_remaining_amount : i.remaining_amount;
+            const progressLabel = `${budgetItemScopeName(i)}使用率`;
+            const progressAvailable = usage.budgetAmount;
+            const progressRemaining = usage.remaining;
             return `
               <tr>
                 <td class="budget-name-cell">
@@ -3946,8 +3956,8 @@ function renderBudgetItemTable(rows) {
                 </td>
                 <td class="budget-cycle-cell mono">
                   <div class="budget-value-row">
-                    <span>${isRollover ? "本週期實際" : "實際"}</span>
-                    <strong>${fmtMoney(i.actual_amount)}</strong>
+                    <span>${budgetItemScopeName(i)}實際</span>
+                    <strong>${fmtMoney(usage.actual)}</strong>
                   </div>
                   <div class="budget-value-row ${budgetItemCycleBalanceClass(i)}">
                     <span>${budgetItemCycleBalanceLabel(i)}</span>
@@ -3961,7 +3971,6 @@ function renderBudgetItemTable(rows) {
                   </div>
                   <div class="${pct !== null && pct > 100 ? "progress danger" : "progress"}"><span style="width:${Math.min(100, Math.max(0, progressPct))}%"></span></div>
                   <div class="budget-progress-meta">可用 ${fmtMoney(progressAvailable)}｜剩餘 ${fmtMoney(progressRemaining)}</div>
-                  ${isRollover && Number(i.remaining_amount || 0) < 0 && Number(i.year_remaining_amount || 0) >= 0 ? `<div class="budget-progress-note">本週期缺口已由累積餘額吸收</div>` : ""}
                 </td>
                 <td class="actions budget-actions-cell">
                   <div class="budget-action-grid">
@@ -7184,7 +7193,7 @@ async function closeBudgetItemCycle(itemId) {
 
   const ok = await confirmAction(
     "預算項目結帳",
-    `確定要結帳「${row.name}」？\n\n本次依「${carryScopeLabel}」承接：${fmtMoney(carry)}\n結帳後主畫面會變成：\n可用 ${fmtMoney(carry)}\n實際 $0\n剩餘 ${fmtMoney(carry)}\n\n累積資訊仍會保留歷史可用 / 實際 / 剩餘。`
+    `確定要結帳「${row.name}」？\n\n本次依「${carryScopeLabel}」承接：${fmtMoney(carry)}\n結帳後主畫面會變成：\n可用 ${fmtMoney(carry)}\n實際 $0\n剩餘 ${fmtMoney(carry)}\n\n舊週期與年度歷史仍保留在結帳紀錄與報表，不會影響新週期進度。`
   );
   if (!ok) return;
 
