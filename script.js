@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v63.6-cycle-progress-reset";
+const APP_VERSION = "v63.7-report-period-filter";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -71,7 +71,12 @@ const state = {
     txStart: "",
     txEnd: "",
     chartScope: "year",
-    chartCategory: ""
+    chartCategory: "",
+    reportPeriodMode: "year",
+    reportPeriodYear: String(new Date().getFullYear()),
+    reportPeriodMonth: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`,
+    reportPeriodStart: `${new Date().getFullYear()}-01-01`,
+    reportPeriodEnd: `${new Date().getFullYear()}-12-31`
   },
   loadErrors: [],
   dbStatus: {
@@ -1279,6 +1284,7 @@ async function loadAll() {
       const current = state.data.years.find(y => Number(y.budget_year) === new Date().getFullYear()) || state.data.years[state.data.years.length - 1];
       state.selectedYearId = current.id;
       state.selectedBudgetYear = current.budget_year;
+      syncReportPeriodToSelectedYear({ force: true });
     }
 
     if (errors.length) {
@@ -2817,6 +2823,7 @@ async function rolloverAnnualBudgetItemsToNextYear() {
   if (refreshedNextYear?.id) {
     state.selectedYearId = refreshedNextYear.id;
     state.selectedBudgetYear = refreshedNextYear.budget_year;
+    syncReportPeriodToSelectedYear({ force: true });
   }
 
   render();
@@ -4475,9 +4482,281 @@ function selectedYearActiveTransactions() {
   return transactionsForSelectedYear().filter(t => t.status !== "cancelled");
 }
 
-function categoryExpenseReportRows() {
+function reportAvailableYears() {
+  const years = new Set();
+  (state.data.years || []).forEach(y => {
+    const year = Number(y.budget_year || 0);
+    if (year) years.add(year);
+  });
+  allTransactionsEnriched().forEach(t => {
+    const year = Number(t.tx_year || 0);
+    if (year) years.add(year);
+  });
+  years.add(Number(state.selectedBudgetYear || new Date().getFullYear()));
+  return Array.from(years).sort((a, b) => b - a);
+}
+
+function defaultReportMonthForYear(yearValue = state.selectedBudgetYear) {
+  const year = Number(yearValue || new Date().getFullYear());
+  const months = allTransactionsEnriched()
+    .filter(t => Number(t.tx_year || 0) === year)
+    .map(t => Number(t.tx_month || 0))
+    .filter(month => month >= 1 && month <= 12);
+  const now = new Date();
+  const fallbackMonth = year === now.getFullYear() ? now.getMonth() + 1 : 1;
+  const month = months.length ? Math.max(...months) : fallbackMonth;
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+function syncReportPeriodToSelectedYear({ force = false } = {}) {
+  const year = String(Number(state.selectedBudgetYear || new Date().getFullYear()));
+  if (force || !state.filters.reportPeriodYear) state.filters.reportPeriodYear = year;
+  if (force || !/^\d{4}-\d{2}$/.test(String(state.filters.reportPeriodMonth || ""))) {
+    state.filters.reportPeriodMonth = defaultReportMonthForYear(year);
+  }
+  if (force || !state.filters.reportPeriodStart) state.filters.reportPeriodStart = `${year}-01-01`;
+  if (force || !state.filters.reportPeriodEnd) state.filters.reportPeriodEnd = `${year}-12-31`;
+}
+
+function reportPeriodBounds() {
+  syncReportPeriodToSelectedYear();
+  const mode = state.filters.reportPeriodMode || "year";
+
+  if (mode === "month") {
+    const monthValue = /^\d{4}-\d{2}$/.test(String(state.filters.reportPeriodMonth || ""))
+      ? String(state.filters.reportPeriodMonth)
+      : defaultReportMonthForYear(state.filters.reportPeriodYear || state.selectedBudgetYear);
+    const [year, month] = monthValue.split("-").map(Number);
+    const lastDay = new Date(year, month, 0).getDate();
+    return {
+      mode,
+      start: `${monthValue}-01`,
+      end: `${monthValue}-${String(lastDay).padStart(2, "0")}`,
+      year,
+      month
+    };
+  }
+
+  if (mode === "custom") {
+    let start = String(state.filters.reportPeriodStart || `${state.selectedBudgetYear}-01-01`);
+    let end = String(state.filters.reportPeriodEnd || `${state.selectedBudgetYear}-12-31`);
+    if (start > end) [start, end] = [end, start];
+    return { mode, start, end, year: Number(start.slice(0, 4)), month: null };
+  }
+
+  const year = Number(state.filters.reportPeriodYear || state.selectedBudgetYear || new Date().getFullYear());
+  return { mode: "year", start: `${year}-01-01`, end: `${year}-12-31`, year, month: null };
+}
+
+function reportPeriodLabel() {
+  const bounds = reportPeriodBounds();
+  if (bounds.mode === "month") return `${bounds.year} 年 ${bounds.month} 月`;
+  if (bounds.mode === "custom") return `${bounds.start} ～ ${bounds.end}`;
+  return `${bounds.year} 年`;
+}
+
+function reportActiveTransactions() {
+  const { start, end } = reportPeriodBounds();
+  return allTransactionsEnriched()
+    .filter(t => t.status !== "cancelled")
+    .filter(t => {
+      const date = String(t.transaction_date || "");
+      return date && date >= start && date <= end;
+    });
+}
+
+function reportChartTransactions() {
+  return reportActiveTransactions()
+    .filter(t => !state.filters.chartCategory || t.category_id === state.filters.chartCategory);
+}
+
+function reportExpenseTransactions({ chart = false } = {}) {
+  const rows = chart ? reportChartTransactions() : reportActiveTransactions();
+  return rows.filter(t => ["expense", "refund"].includes(t.type));
+}
+
+function reportMonthBuckets(factory) {
+  const { start, end } = reportPeriodBounds();
+  const startDate = new Date(`${start.slice(0, 7)}-01T00:00:00`);
+  const today = new Date();
+  const todayText = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const effectiveEnd = end > todayText ? todayText : end;
+  const endDate = new Date(`${effectiveEnd.slice(0, 7)}-01T00:00:00`);
+  const rows = [];
+  const spansYears = start.slice(0, 4) !== effectiveEnd.slice(0, 4);
+
+  for (let cursor = new Date(startDate); cursor <= endDate; cursor.setMonth(cursor.getMonth() + 1)) {
+    const year = cursor.getFullYear();
+    const month = cursor.getMonth() + 1;
+    rows.push(factory({
+      key: `${year}-${String(month).padStart(2, "0")}`,
+      year,
+      month,
+      label: spansYears ? `${year}/${month}` : `${month}月`
+    }));
+  }
+  return rows;
+}
+
+function getReportMonthlyAnalyticsRows({ chart = false } = {}) {
+  const rows = reportMonthBuckets(({ key, year, month, label }) => ({
+    key,
+    year,
+    month,
+    label,
+    income: 0,
+    expense: 0,
+    saving: 0,
+    savingsRate: null
+  }));
+  const map = new Map(rows.map(row => [row.key, row]));
+  const source = chart ? reportChartTransactions() : reportActiveTransactions();
+
+  source.forEach(t => {
+    const key = `${t.tx_year}-${String(t.tx_month || 0).padStart(2, "0")}`;
+    const row = map.get(key);
+    if (!row) return;
+    if (t.type === "income") row.income += Number(t.amount || 0);
+    if (t.type === "expense") row.expense += Number(t.amount || 0);
+    if (t.type === "refund") row.expense -= Number(t.amount || 0);
+  });
+
+  rows.forEach(row => {
+    row.saving = row.income - row.expense;
+    row.savingsRate = row.income > 0 ? Math.round((row.saving / row.income) * 1000) / 10 : null;
+  });
+  return rows;
+}
+
+function getReportHealthRows({ chart = false } = {}) {
+  const order = ["survival", "quality", "luxury", "investment", "other"];
+  const map = new Map(order.map(key => [key, { key, name: healthLevelName(key), amount: 0 }]));
+  reportExpenseTransactions({ chart }).forEach(t => {
+    const key = map.has(t.necessity_level) ? t.necessity_level : "other";
+    map.get(key).amount += t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
+  });
+  return order.map(key => map.get(key)).filter(row => Math.abs(Number(row.amount || 0)) > 0);
+}
+
+function getReportHealthTrendRows() {
+  const rows = reportMonthBuckets(({ key, label }) => ({
+    key,
+    label,
+    survival: 0,
+    quality: 0,
+    luxury: 0,
+    investment: 0,
+    other: 0
+  }));
+  const map = new Map(rows.map(row => [row.key, row]));
+  reportExpenseTransactions({ chart: true }).forEach(t => {
+    const key = `${t.tx_year}-${String(t.tx_month || 0).padStart(2, "0")}`;
+    const row = map.get(key);
+    if (!row) return;
+    const level = ["survival", "quality", "luxury", "investment"].includes(t.necessity_level) ? t.necessity_level : "other";
+    row[level] += t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
+  });
+  return rows;
+}
+
+function getReportCategoryNetExpenseRows(limit = 8) {
+  const grouped = new Map();
+  reportChartTransactions().forEach(t => {
+    if (!["expense", "refund"].includes(t.type)) return;
+    const key = t.category_id || t.category_name || "uncategorized";
+    const name = t.category_name || "未分類";
+    const delta = t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
+    grouped.set(key, { name, amount: Number((grouped.get(key)?.amount || 0) + delta) });
+  });
+  return Array.from(grouped.values())
+    .filter(row => Number(row.amount || 0) > 0)
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, limit);
+}
+
+function getReportTrendRows() {
+  const bounds = reportPeriodBounds();
+  const source = reportChartTransactions();
+
+  if (bounds.mode === "month") {
+    const daysInMonth = new Date(bounds.year, bounds.month, 0).getDate();
+    const rows = Array.from({ length: daysInMonth }, (_, index) => ({
+      label: `${index + 1}日`,
+      income: 0,
+      expense: 0,
+      net: 0
+    }));
+    source.forEach(t => {
+      const day = Number(String(t.transaction_date || "").slice(8, 10));
+      const row = rows[day - 1];
+      if (!row) return;
+      if (t.type === "income") row.income += Number(t.amount || 0);
+      if (t.type === "expense") row.expense += Number(t.amount || 0);
+      if (t.type === "refund") row.expense -= Number(t.amount || 0);
+    });
+    rows.forEach(row => { row.net = row.income - row.expense; });
+    return rows;
+  }
+
+  return getReportMonthlyAnalyticsRows({ chart: true }).map(row => ({
+    label: row.label,
+    income: row.income,
+    expense: row.expense,
+    net: row.income - row.expense
+  }));
+}
+
+function renderReportPeriodFilter() {
+  syncReportPeriodToSelectedYear();
+  const mode = state.filters.reportPeriodMode || "year";
+  const year = String(state.filters.reportPeriodYear || state.selectedBudgetYear);
+  const yearOptions = reportAvailableYears()
+    .map(value => `<option value="${value}" ${String(value) === year ? "selected" : ""}>${value}</option>`)
+    .join("");
+
+  const control = mode === "month"
+    ? `<label class="report-period-field"><span>月份</span><input class="input" type="month" id="reportPeriodMonth" value="${escapeHtml(state.filters.reportPeriodMonth || defaultReportMonthForYear(year))}"></label>`
+    : mode === "custom"
+      ? `<label class="report-period-field"><span>開始日</span><input class="input" type="date" id="reportPeriodStart" value="${escapeHtml(state.filters.reportPeriodStart || `${year}-01-01`)}"></label>
+         <label class="report-period-field"><span>結束日</span><input class="input" type="date" id="reportPeriodEnd" value="${escapeHtml(state.filters.reportPeriodEnd || `${year}-12-31`)}"></label>`
+      : `<label class="report-period-field"><span>年份</span><select class="input" id="reportPeriodYear">${yearOptions}</select></label>`;
+
+  return `
+    <div class="card report-period-filter-card">
+      <div class="card-title-row">
+        <h3>表格與圖表期間</h3>
+        <span class="badge">${escapeHtml(reportPeriodLabel())}</span>
+      </div>
+      <div class="report-period-toolbar">
+        <div class="segmented report-period-tabs" role="group" aria-label="報表期間">
+          <button class="seg-btn ${mode === "year" ? "active" : ""}" type="button" data-report-period-mode="year">年度</button>
+          <button class="seg-btn ${mode === "month" ? "active" : ""}" type="button" data-report-period-mode="month">月份</button>
+          <button class="seg-btn ${mode === "custom" ? "active" : ""}" type="button" data-report-period-mode="custom">自訂期間</button>
+        </div>
+        <div class="report-period-controls">
+          ${control}
+          <label class="report-period-field report-chart-category-field">
+            <span>圖表分類</span>
+            <select class="input" id="chartCategoryFilter">
+              <option value="">全部分類</option>
+              ${state.data.categories
+                .filter(c => c.type === "expense")
+                .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name))
+                .map(c => `<option value="${escapeHtml(c.id)}" ${state.filters.chartCategory === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
+                .join("")}
+            </select>
+          </label>
+          <button class="btn small secondary report-period-reset" type="button" id="resetReportPeriodBtn">重設</button>
+        </div>
+      </div>
+      <p class="metric-sub">期間會同步套用至現金流、損益、分類支出、月度比較、必要程度與對應交易型圖表。圖表分類只影響圖表；資產負債、訂閱、帳面淨資產與預算型報表維持原本口徑。</p>
+    </div>
+  `;
+}
+
+function categoryExpenseReportRows(sourceRows = reportActiveTransactions()) {
   const rows = new Map();
-  const expenses = selectedYearActiveTransactions().filter(t => ["expense", "refund"].includes(t.type));
+  const expenses = sourceRows.filter(t => ["expense", "refund"].includes(t.type));
   expenses.forEach(t => {
     const key = t.category_name || "未分類";
     if (!rows.has(key)) rows.set(key, { category: key, amount: 0, count: 0, max: 0 });
@@ -4538,29 +4817,34 @@ function recurringReportRows() {
 }
 
 function monthlyComparisonReportRows() {
-  return getMonthlyAnalyticsRows().map(r => {
-    const budgetUsed = Number(getCurrentYearSummary().available_budget || 0)
-      ? Number(r.expense || 0) / Number(getCurrentYearSummary().available_budget || 1)
-      : 0;
+  const bounds = reportPeriodBounds();
+  const canCompareBudget = bounds.start.slice(0, 4) === bounds.end.slice(0, 4)
+    && Number(bounds.start.slice(0, 4)) === Number(state.selectedBudgetYear);
+  const annualBudget = canCompareBudget ? Number(getCurrentYearSummary().available_budget || 0) : 0;
+  return getReportMonthlyAnalyticsRows().map(r => {
+    const budgetUsed = annualBudget > 0 ? Number(r.expense || 0) / annualBudget : null;
     return {
       month: r.label,
       income: r.income,
       expense: r.expense,
       net: r.income - r.expense,
       savingsRate: r.savingsRate === null ? "N/A" : `${fmtNumber(r.savingsRate, 1)}%`,
-      budgetShare: `${fmtNumber(budgetUsed * 100, 1)}%`
+      budgetShare: budgetUsed === null ? "N/A" : `${fmtNumber(budgetUsed * 100, 1)}%`
     };
   });
 }
 
-function necessityReportRows() {
-  const rows = getHealthRows();
-  const total = rows.reduce((sum, r) => sum + Math.max(0, Number(r.amount || 0)), 0) || 1;
+function necessityReportRows(sourceRows = reportExpenseTransactions()) {
+  const order = ["survival", "quality", "luxury", "investment", "other"];
+  const amountMap = new Map(order.map(key => [key, { key, name: healthLevelName(key), amount: 0 }]));
   const countMap = new Map();
-  expenseRowsForSelectedYear().forEach(t => {
+  sourceRows.forEach(t => {
     const key = ["survival", "quality", "luxury", "investment"].includes(t.necessity_level) ? t.necessity_level : "other";
+    amountMap.get(key).amount += t.type === "refund" ? -Number(t.amount || 0) : Number(t.amount || 0);
     if (t.type === "expense") countMap.set(key, Number(countMap.get(key) || 0) + 1);
   });
+  const rows = order.map(key => amountMap.get(key)).filter(row => Math.abs(Number(row.amount || 0)) > 0 || Number(countMap.get(row.key) || 0) > 0);
+  const total = rows.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0) || 1;
   return rows.map(r => ({
     ...r,
     share: Number(r.amount || 0) / total,
@@ -4569,7 +4853,7 @@ function necessityReportRows() {
 }
 
 function pnlStatementRows() {
-  const tx = selectedYearActiveTransactions();
+  const tx = reportActiveTransactions();
   const incomeMap = new Map();
   const expenseNatureMap = new Map([
     ["fixed", 0],
@@ -4873,10 +5157,10 @@ function renderSelectedChartReport() {
       note: "看奢侈娛樂、生活品質、自我投資等必要程度是否逐月膨脹。"
     },
     monthly: {
-      title: state.filters.chartScope === "month" ? "本月日度收支趨勢" : "月度收支趨勢",
+      title: reportPeriodBounds().mode === "month" ? `${reportPeriodLabel()}日度收支趨勢` : "期間月度收支趨勢",
       badge: "折線圖",
       canvas: "reportsMonthlyChart",
-      note: `${chartScopeText()}。用來看收支節奏是否失控。`
+      note: `${reportPeriodLabel()}。用來看收支節奏是否失控。`
     },
     savingsRate: {
       title: "儲蓄率",
@@ -4907,7 +5191,7 @@ function renderSelectedChartReport() {
       title: "分類淨支出排行",
       badge: "長條圖",
       canvas: "reportsCategoryChart",
-      note: `${chartScopeText()}。退款會從原分類扣回。`
+      note: `${reportPeriodLabel()}。退款會從原分類扣回。`
     },
     budgetCompare: {
       title: "預算 vs 實際",
@@ -4943,12 +5227,27 @@ function renderSelectedChartReport() {
   `;
 }
 
+function reportTableModeUsesPeriod(mode = state.reportTableMode || "pnl") {
+  return ["cashflow", "pnl", "category", "monthly", "necessity"].includes(mode);
+}
+
+function reportChartModeUsesPeriod(mode = state.reportChartMode || "categoryExpense") {
+  return ["categoryExpense", "necessity", "necessityTrend", "monthly", "savingsRate", "pareto", "categoryNet"].includes(mode);
+}
+
+function reportModeScopeBadge(usesPeriod) {
+  return usesPeriod ? reportPeriodLabel() : "固定口徑";
+}
+
 function renderChartReportCenter() {
   return `
     <div class="card chart-card report-center-card">
       <div class="card-title-row">
         <h3>圖表報表</h3>
-        <span class="badge">模式切換</span>
+        <div class="btn-row compact-actions">
+          <span class="badge">模式切換</span>
+          <span class="badge">${escapeHtml(reportModeScopeBadge(reportChartModeUsesPeriod()))}</span>
+        </div>
       </div>
       ${reportTabs("reportChartMode", [
         { mode: "categoryExpense", label: "分類支出" },
@@ -5068,7 +5367,10 @@ function renderTableReportCenter() {
     <div class="card report-center-card">
       <div class="card-title-row">
         <h3>表格式報表</h3>
-        <span class="badge">${escapeHtml(labels[state.reportTableMode] || labels.pnl)}</span>
+        <div class="btn-row compact-actions">
+          <span class="badge">${escapeHtml(labels[state.reportTableMode] || labels.pnl)}</span>
+          <span class="badge">${escapeHtml(reportModeScopeBadge(reportTableModeUsesPeriod()))}</span>
+        </div>
       </div>
       ${reportTabs("reportTableMode", [
         { mode: "cashflow", label: "現金流量表" },
@@ -5138,8 +5440,9 @@ function renderReports() {
   return `
     ${renderFinancialHealthDashboard()}
 
-    ${renderChartToolbar()}
     ${renderAnalyticsSummaryCards()}
+
+    ${renderReportPeriodFilter()}
 
     ${renderTableReportCenter()}
 
@@ -5308,7 +5611,9 @@ function getNetWorthRows() {
 }
 
 function getParetoRows(limit = 12) {
-  const totalRows = getCategoryNetExpenseRows(999);
+  const totalRows = categoryExpenseReportRows(reportChartTransactions())
+    .filter(row => Number(row.amount || 0) > 0)
+    .map(row => ({ name: row.category, amount: Number(row.amount || 0) }));
   const total = totalRows.reduce((sum, r) => sum + Number(r.amount || 0), 0) || 1;
   let cumulative = 0;
   return totalRows.slice(0, limit).map((r, index) => {
@@ -5994,7 +6299,7 @@ function initCharts() {
 
   const makeCategoryBar = id => {
     const el = document.getElementById(id);
-    const rows = getCategoryNetExpenseRows(8);
+    const rows = id.startsWith("reports") ? getReportCategoryNetExpenseRows(8) : getCategoryNetExpenseRows(8);
     if (!el || !rows.length) return;
     chartInstances[id] = new Chart(el, {
       type: "bar",
@@ -6016,7 +6321,7 @@ function initCharts() {
 
   const makeTrendLine = id => {
     const el = document.getElementById(id);
-    const rows = getTrendRows();
+    const rows = id.startsWith("reports") ? getReportTrendRows() : getTrendRows();
     const hasData = rows.some(r => r.income || r.expense || r.net);
     if (!el || !hasData) return;
     chartInstances[id] = new Chart(el, {
@@ -6092,7 +6397,7 @@ function initCharts() {
 
   const makeHealthTrend = id => {
     const el = document.getElementById(id);
-    const rows = getHealthTrendRows();
+    const rows = getReportHealthTrendRows();
     const hasData = rows.some(r => r.survival || r.quality || r.luxury || r.investment || r.other);
     if (!el || !hasData) return;
     chartInstances[id] = new Chart(el, {
@@ -6118,7 +6423,7 @@ function initCharts() {
 
   const makeSavingsRate = id => {
     const el = document.getElementById(id);
-    const rows = getMonthlyAnalyticsRows();
+    const rows = getReportMonthlyAnalyticsRows({ chart: true });
     const hasData = rows.some(r => r.income || r.expense);
     if (!el || !hasData) return;
     chartInstances[id] = new Chart(el, {
@@ -6197,7 +6502,7 @@ function initCharts() {
 
   const makeCategoryExpenseReportBar = id => {
     const el = document.getElementById(id);
-    const rows = categoryExpenseReportRows().slice(0, 10);
+    const rows = categoryExpenseReportRows(reportChartTransactions()).slice(0, 10);
     if (!el || !rows.length) return;
     chartInstances[id] = new Chart(el, {
       type: "bar",
@@ -6264,7 +6569,7 @@ function initCharts() {
 
   const makeCategoryExpensePie = id => {
     const el = document.getElementById(id);
-    const rows = topFivePlusOther(categoryExpenseReportRows(), "category", "amount");
+    const rows = topFivePlusOther(categoryExpenseReportRows(reportChartTransactions()), "category", "amount");
     if (!el || !rows.length) return;
     chartInstances[id] = new Chart(el, {
       type: "doughnut",
@@ -6334,7 +6639,7 @@ function initCharts() {
 
   const makeNecessityAnalysisDoughnut = id => {
     const el = document.getElementById(id);
-    const rows = necessityReportRows().filter(r => Number(r.amount || 0) > 0);
+    const rows = necessityReportRows(reportExpenseTransactions({ chart: true })).filter(r => Number(r.amount || 0) > 0);
     if (!el || !rows.length) return;
     chartInstances[id] = new Chart(el, {
       type: "doughnut",
@@ -7286,6 +7591,7 @@ async function closeYearToNextYear() {
 
   state.selectedYearId = next.id;
   state.selectedBudgetYear = next.budget_year;
+  syncReportPeriodToSelectedYear({ force: true });
   await loadAll();
   render();
   showAlert(`已結轉到 ${nextYearNumber} 年：前期結轉 ${fmtMoney(carryover)}。`, "good");
@@ -7318,6 +7624,52 @@ function bindRenderedEvents() {
 
   $("#chartCategoryFilter")?.addEventListener("change", e => {
     state.filters.chartCategory = e.target.value;
+    render();
+  });
+
+  $$("[data-report-period-mode]").forEach(btn => btn.addEventListener("click", () => {
+    state.filters.reportPeriodMode = btn.dataset.reportPeriodMode || "year";
+    syncReportPeriodToSelectedYear();
+    render();
+  }));
+
+  $("#reportPeriodYear")?.addEventListener("change", e => {
+    state.filters.reportPeriodYear = e.target.value;
+    state.filters.reportPeriodMonth = defaultReportMonthForYear(e.target.value);
+    state.filters.reportPeriodStart = `${e.target.value}-01-01`;
+    state.filters.reportPeriodEnd = `${e.target.value}-12-31`;
+    render();
+  });
+
+  $("#reportPeriodMonth")?.addEventListener("change", e => {
+    if (!e.target.value) return;
+    state.filters.reportPeriodMonth = e.target.value;
+    state.filters.reportPeriodYear = e.target.value.slice(0, 4);
+    render();
+  });
+
+  $("#reportPeriodStart")?.addEventListener("change", e => {
+    if (!e.target.value) return;
+    state.filters.reportPeriodStart = e.target.value;
+    if (state.filters.reportPeriodEnd && state.filters.reportPeriodStart > state.filters.reportPeriodEnd) {
+      state.filters.reportPeriodEnd = state.filters.reportPeriodStart;
+    }
+    render();
+  });
+
+  $("#reportPeriodEnd")?.addEventListener("change", e => {
+    if (!e.target.value) return;
+    state.filters.reportPeriodEnd = e.target.value;
+    if (state.filters.reportPeriodStart && state.filters.reportPeriodEnd < state.filters.reportPeriodStart) {
+      state.filters.reportPeriodStart = state.filters.reportPeriodEnd;
+    }
+    render();
+  });
+
+  $("#resetReportPeriodBtn")?.addEventListener("click", () => {
+    state.filters.reportPeriodMode = "year";
+    state.filters.chartCategory = "";
+    syncReportPeriodToSelectedYear({ force: true });
     render();
   });
 
@@ -7687,7 +8039,7 @@ function mapToSortedRows(map) {
 }
 
 function cashflowStatementRows() {
-  const rows = transactionsForSelectedYear().filter(t => t.status !== "cancelled");
+  const rows = reportActiveTransactions();
   const incomeByCategory = new Map();
   const expenseByCategory = new Map();
   const transferByPurpose = new Map();
@@ -7723,7 +8075,7 @@ function cashflowStatementRows() {
   };
   const blank = () => push("", "", "", "", "");
 
-  push("個人現金流量表", `${state.selectedBudgetYear} 年度`, "", "", "");
+  push("個人現金流量表", reportPeriodLabel(), "", "", "");
   push("產生時間", new Date().toLocaleString("zh-TW"), "", "", "");
   push("口徑說明", "收入與支出採直接法；轉帳只列備查，不影響收入、支出、儲蓄率。", "", "", "");
   blank();
@@ -7748,11 +8100,17 @@ function cashflowStatementRows() {
   transferRows.forEach(r => push("轉帳明細", r.name, r.amount, "備查，不影響淨現金流", ""));
   blank();
 
-  const current = getCurrentYearSummary();
-  push("五、預算摘要", "年度可用預算", Number(current.available_budget || 0), "", "");
-  push("五、預算摘要", "年度已用預算", -Number(current.actual_expense || 0), "", "");
-  push("五、預算摘要", "年度剩餘預算", Number(current.remaining_budget || 0), "", "");
-  push("五、預算摘要", "預算使用率", `${fmtNumber(current.budget_used_pct || 0, 1)}%`, "", "");
+  const bounds = reportPeriodBounds();
+  const isSelectedFullYear = bounds.mode === "year" && Number(bounds.year) === Number(state.selectedBudgetYear);
+  if (isSelectedFullYear) {
+    const current = getCurrentYearSummary();
+    push("五、預算摘要", "年度可用預算", Number(current.available_budget || 0), "", "");
+    push("五、預算摘要", "年度已用預算", -Number(current.actual_expense || 0), "", "");
+    push("五、預算摘要", "年度剩餘預算", Number(current.remaining_budget || 0), "", "");
+    push("五、預算摘要", "預算使用率", `${fmtNumber(current.budget_used_pct || 0, 1)}%`, "", "");
+  } else {
+    push("五、預算摘要", "未套用", "", "預算 envelope 為年度口徑；月份或自訂期間不直接拆分年度預算。", "");
+  }
   return out;
 }
 
@@ -7960,6 +8318,7 @@ async function init() {
     state.selectedYearId = e.target.value;
     const y = state.data.years.find(row => row.id === state.selectedYearId);
     state.selectedBudgetYear = y ? y.budget_year : new Date().getFullYear();
+    syncReportPeriodToSelectedYear({ force: true });
     clearEditing();
     render();
   });

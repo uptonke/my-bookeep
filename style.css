@@ -2187,3 +2187,81 @@ td.actions { width: 126px; }
     opacity: 1;
   }
 }
+
+
+/* v63.7：表格式報表與圖表報表共用期間篩選 */
+.report-period-filter-card {
+  overflow: visible;
+}
+.report-period-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+}
+.report-period-tabs {
+  flex: 0 0 auto;
+}
+.report-period-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.report-period-field {
+  display: grid;
+  gap: 6px;
+  min-width: 150px;
+}
+.report-period-field > span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.report-period-field .input {
+  min-height: 38px;
+}
+.report-chart-category-field {
+  min-width: 180px;
+}
+.report-period-reset {
+  min-height: 38px;
+  align-self: end;
+}
+
+@media (max-width: 900px) {
+  .report-period-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .report-period-tabs {
+    width: 100%;
+    overflow-x: auto;
+  }
+  .report-period-controls {
+    justify-content: stretch;
+  }
+  .report-period-field,
+  .report-chart-category-field {
+    min-width: min(100%, 220px);
+    flex: 1 1 180px;
+  }
+  .report-period-reset {
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .report-period-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .report-period-field,
+  .report-chart-category-field,
+  .report-period-reset {
+    width: 100%;
+    min-width: 0;
+  }
+}
