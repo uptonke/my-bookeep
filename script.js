@@ -1,6 +1,6 @@
 /* global supabase, APP_CONFIG */
 
-const APP_VERSION = "v63.7-report-period-filter";
+const APP_VERSION = "v63.8-budget-contribution-allocation-fix";
 const chartInstances = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -805,10 +805,23 @@ function latestBudgetClosure(itemId) {
   return rows.length ? rows[rows.length - 1] : null;
 }
 
-function isAfterBudgetClosure(dateValue, closure) {
+function isAfterBudgetClosure(dateValue, closure, createdAt = "") {
   if (!closure) return true;
   if (!dateValue) return false;
-  return String(dateValue) > String(closure.contribution_date || "");
+
+  const eventDate = String(dateValue);
+  const closureDate = String(closure.contribution_date || "");
+
+  if (eventDate > closureDate) return true;
+  if (eventDate < closureDate) return false;
+
+  // 同一天結帳時，日期本身無法判斷先後；改用資料列 created_at 作為 tie-breaker。
+  // 若舊資料沒有 created_at，保守沿用原本行為：視為不在新週期。
+  const eventCreatedAt = String(createdAt || "");
+  const closureCreatedAt = String(closure.created_at || "");
+  if (!eventCreatedAt || !closureCreatedAt) return false;
+
+  return eventCreatedAt > closureCreatedAt;
 }
 
 function budgetClosureCarryAmount(closure) {
@@ -824,18 +837,26 @@ function budgetContributionCountActual(itemId) {
 }
 
 function budgetCurrentAvailableAmount(item) {
-  const movementNet = budgetMovementNet(item.id || item.budget_item_id);
-  if (budgetIsContributionMode(item)) return budgetContributionTotal(item.id || item.budget_item_id) + movementNet;
-  return Number(item?.planned_amount || 0) + movementNet;
+  const itemId = item.id || item.budget_item_id;
+  const movementNet = budgetMovementNet(itemId);
+  const contributionTotal = budgetContributionTotal(itemId);
+  if (budgetIsContributionMode(item)) return contributionTotal + movementNet;
+  return Number(item?.planned_amount || 0) + contributionTotal + movementNet;
 }
 
 function budgetFundingLabel(item) {
   const itemId = item.id || item.budget_item_id;
+  const contributionTotal = budgetContributionTotal(itemId);
+  const contributionCount = budgetContributionCountActual(itemId);
+
   if (budgetIsAnnualRolloverMode(item)) {
-    return `年度新增 ${fmtMoney(item?.planned_amount || 0)} + 結轉/提撥 ${fmtMoney(budgetContributionTotal(itemId))}`;
+    return `年度新增 ${fmtMoney(item?.planned_amount || 0)} + 結轉/提撥 ${fmtMoney(contributionTotal)}`;
   }
   if (budgetIsContributionMode(item)) {
-    return `實際提撥 ${budgetContributionCountActual(itemId)} 筆，累積 ${fmtMoney(budgetContributionTotal(itemId))}`;
+    return `實際提撥 ${contributionCount} 筆，累積 ${fmtMoney(contributionTotal)}`;
+  }
+  if (contributionTotal) {
+    return `基礎預算 ${fmtMoney(item?.planned_amount || 0)} + 加碼提撥 ${fmtMoney(contributionTotal)}`;
   }
   if (item?.period_type && item.period_type !== "annual") {
     return `${labelOf(item.period_type)} ${fmtMoney(item.planned_amount)}`;
@@ -912,7 +933,7 @@ function txRowsForBudgetItem(itemId) {
 function actualForBudgetItem(item, scope = "year", closure = null) {
   return txRowsForBudgetItem(item.id || item.budget_item_id).reduce((sum, t) => {
     if (scope === "month" && Number(t.tx_month || 0) !== currentBudgetMonth()) return sum;
-    if (scope === "cycle" && !isAfterBudgetClosure(t.transaction_date, closure)) return sum;
+    if (scope === "cycle" && !isAfterBudgetClosure(t.transaction_date, closure, t.created_at)) return sum;
     if (item.item_type === "expense" && t.type === "refund") return sum - Number(t.amount || 0);
     if (t.type === item.item_type) return sum + Number(t.amount || 0);
     return sum;
@@ -922,7 +943,7 @@ function actualForBudgetItem(item, scope = "year", closure = null) {
 function contributionsForBudgetItemInScope(itemId, scope = "year", closure = null) {
   return contributionsForBudgetItem(itemId)
     .filter(c => scope !== "month" || isCurrentBudgetMonth(c.contribution_date))
-    .filter(c => scope !== "cycle" || isAfterBudgetClosure(c.contribution_date, closure));
+    .filter(c => scope !== "cycle" || isAfterBudgetClosure(c.contribution_date, closure, c.created_at));
 }
 
 function budgetContributionTotalInScope(itemId, scope = "year", closure = null) {
@@ -936,7 +957,7 @@ function budgetContributionCountInScope(itemId, scope = "year", closure = null) 
 function movementsForBudgetItemInScope(itemId, scope = "year", closure = null) {
   return movementsForBudgetItem(itemId)
     .filter(m => scope !== "month" || isCurrentBudgetMonth(m.movement_date))
-    .filter(m => scope !== "cycle" || isAfterBudgetClosure(m.movement_date, closure));
+    .filter(m => scope !== "cycle" || isAfterBudgetClosure(m.movement_date, closure, m.created_at));
 }
 
 function budgetMovementInTotalInScope(itemId, scope = "year", closure = null) {
@@ -958,26 +979,25 @@ function budgetMovementNetInScope(itemId, scope = "year", closure = null) {
 function budgetAvailableForScope(item, scope = "year", closure = null) {
   const itemId = item.id || item.budget_item_id;
   const movementNet = budgetMovementNetInScope(itemId, scope, closure);
+  const contributionTotal = budgetContributionTotalInScope(itemId, scope, closure);
 
   if (scope === "cycle") {
-    return budgetClosureCarryAmount(closure) + budgetContributionTotalInScope(itemId, scope, closure) + movementNet;
+    return budgetClosureCarryAmount(closure) + contributionTotal + movementNet;
   }
 
   if (budgetIsAnnualRolloverMode(item)) {
     // 年度結轉型：今年新增預算 + 今年收到的前期結轉/加碼提撥 + 預算移轉 - 今年實際。
     // 實際花費由 selectedBudgetYear 控制，跨年後自然歸 0。
-    return Number(item.planned_amount || 0) + budgetContributionTotalInScope(itemId, scope) + movementNet;
+    return Number(item.planned_amount || 0) + contributionTotal + movementNet;
   }
 
   if (budgetIsContributionMode(item)) {
-    return budgetContributionTotalInScope(itemId, scope) + movementNet;
+    return contributionTotal + movementNet;
   }
 
-  if (scope === "month" && item.period_type === "monthly") {
-    return Number(item.planned_amount || 0) + movementNet;
-  }
-
-  return Number(item.planned_amount || 0) + movementNet;
+  // 「項目提撥」的 UI 定義是增加指定 envelope 額度，因此固定型預算也必須吃進手動提撥。
+  // 否則會出現提撥紀錄已寫入，但「項目已分配 / 預算剩餘銀彈 / 安全墊」完全不變。
+  return Number(item.planned_amount || 0) + contributionTotal + movementNet;
 }
 
 function budgetPrimaryScope(item, closure = null) {
@@ -1003,10 +1023,10 @@ function budgetItemSummariesForSelectedYear() {
       const latest_closure = latestBudgetClosure(i.id);
       const primary_scope = budgetPrimaryScope(i, latest_closure);
 
-      const year_contribution_count = budgetContributionEligible(i) ? budgetContributionCountInScope(i.id, "year") : budgetContributionCount(i);
-      const month_contribution_count = budgetContributionEligible(i) ? budgetContributionCountInScope(i.id, "month") : 0;
-      const year_contribution_total = budgetContributionEligible(i) ? budgetContributionTotalInScope(i.id, "year") : 0;
-      const month_contribution_total = budgetContributionEligible(i) ? budgetContributionTotalInScope(i.id, "month") : 0;
+      const year_contribution_count = budgetContributionCountInScope(i.id, "year");
+      const month_contribution_count = budgetContributionCountInScope(i.id, "month");
+      const year_contribution_total = budgetContributionTotalInScope(i.id, "year");
+      const month_contribution_total = budgetContributionTotalInScope(i.id, "month");
 
       const year_movement_in = budgetMovementInTotalInScope(i.id, "year");
       const year_movement_out = budgetMovementOutTotalInScope(i.id, "year");
